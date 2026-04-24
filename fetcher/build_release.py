@@ -56,6 +56,7 @@ def main() -> int:
 
     groups: Dict[str, Dict] = {}
     satcat_meta = None
+    jcat_meta = None
     assets: List[str] = []
 
     for path in sorted(DATA_DIR.glob("*.json")):
@@ -76,6 +77,18 @@ def main() -> int:
         if slug == "satcat":
             meta["source"] = "spacetrack"
             satcat_meta = meta
+        elif slug == "jcat_status":
+            meta["source"] = "planet4589"
+            # record_count for dict-shaped payloads
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                meta["record_count"] = (
+                    len(payload) if isinstance(payload, dict) else -1
+                )
+            except Exception:
+                meta["record_count"] = -1
+            jcat_meta = meta
         else:
             meta["source"] = "celestrak"
             groups[slug] = meta
@@ -93,6 +106,8 @@ def main() -> int:
     }
     if satcat_meta is not None:
         manifest["satcat"] = satcat_meta
+    if jcat_meta is not None:
+        manifest["jcat_status"] = jcat_meta
 
     MANIFEST_PATH.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2)

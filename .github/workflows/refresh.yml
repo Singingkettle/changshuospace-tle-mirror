@@ -95,6 +95,11 @@ jobs:
           SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
         run: python fetch_spacetrack.py satcat
 
+      - name: Fetch JCAT operational status (planet4589)
+        working-directory: fetcher
+        run: python parse_jcat.py
+        continue-on-error: true   # JCAT outage shouldn't block the TLE release
+
       - name: Build manifest
         id: build
         working-directory: fetcher
