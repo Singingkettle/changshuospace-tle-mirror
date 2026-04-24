@@ -24,6 +24,7 @@ from typing import Dict, List, Optional
 import requests
 
 from constellations import CONSTELLATIONS
+from tle_synthesizer import fill_missing_tle_lines
 
 BASE_URL = "https://www.space-track.org"
 LOGIN_URL = f"{BASE_URL}/ajaxauth/login"
@@ -161,11 +162,18 @@ def main() -> int:
                     nid = r.get("NORAD_CAT_ID")
                     if nid:
                         merged[int(nid)] = r
+                merged_records = list(merged.values())
+                # Fill in TLE_LINE1/2 for OMM-only records (very recent
+                # launches whose plain TLE strings haven't been published).
+                merged_records, filled = fill_missing_tle_lines(merged_records)
+                if filled:
+                    print(f"[spacetrack] {slug}: synthesised TLE lines for "
+                          f"{filled} OMM-only records")
                 target.write_text(
-                    json.dumps(list(merged.values()), ensure_ascii=False,
+                    json.dumps(merged_records, ensure_ascii=False,
                                separators=(",", ":"))
                 )
-                print(f"[spacetrack] merged {slug}: {len(merged)} total")
+                print(f"[spacetrack] merged {slug}: {len(merged_records)} total")
         else:
             print(f"[spacetrack] unknown mode {mode}", file=sys.stderr)
             return 1

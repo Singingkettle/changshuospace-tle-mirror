@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 import requests
 
 from constellations import CONSTELLATIONS, ALL_SLUGS
+from tle_synthesizer import fill_missing_tle_lines
 
 CELESTRAK_GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
 THROTTLE_SEC = 5
@@ -94,6 +95,14 @@ def main() -> int:
             print(f"[celestrak] skip unknown slug {slug}", file=sys.stderr)
             continue
         records = fetch_group(slug, CONSTELLATIONS[slug])
+        # Some recent launches arrive as OMM-only (no plain TLE strings).
+        # Synthesize line1/line2 from the OMM elements before publishing
+        # so downstream consumers (puller, satellite.js, sgp4 in any
+        # language) all see a TLE-complete payload.
+        records, filled = fill_missing_tle_lines(records)
+        if filled:
+            print(f"[celestrak] {slug}: synthesised TLE lines for "
+                  f"{filled} OMM-only records")
         out = DATA_DIR / f"{slug}.json"
         out.write_text(json.dumps(records, ensure_ascii=False, separators=(",", ":")))
         summary[slug] = len(records)
