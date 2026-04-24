@@ -140,11 +140,32 @@ def main() -> int:
                 return 1
             for slug in slugs:
                 records = fetch_gp_for_slug(session, slug)
-                if records:
-                    (DATA_DIR / f"{slug}.json").write_text(
-                        json.dumps(records, ensure_ascii=False,
-                                   separators=(",", ":"))
-                    )
+                if not records:
+                    continue
+                # Merge with whatever CelesTrak already wrote — Space-Track
+                # adds satellites missing from CelesTrak (e.g. very recent
+                # yinhe / lynk launches). Dedup by NORAD_CAT_ID, ST wins
+                # because its TLEs are usually more recent.
+                target = DATA_DIR / f"{slug}.json"
+                merged: Dict[int, Dict] = {}
+                if target.exists():
+                    try:
+                        existing = json.loads(target.read_text() or "[]")
+                        for r in existing:
+                            nid = r.get("NORAD_CAT_ID")
+                            if nid:
+                                merged[int(nid)] = r
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                for r in records:
+                    nid = r.get("NORAD_CAT_ID")
+                    if nid:
+                        merged[int(nid)] = r
+                target.write_text(
+                    json.dumps(list(merged.values()), ensure_ascii=False,
+                               separators=(",", ":"))
+                )
+                print(f"[spacetrack] merged {slug}: {len(merged)} total")
         else:
             print(f"[spacetrack] unknown mode {mode}", file=sys.stderr)
             return 1

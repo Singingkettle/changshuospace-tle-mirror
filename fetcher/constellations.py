@@ -31,13 +31,35 @@ CONSTELLATIONS = {
     "xingwang":   {"group": "xingwang",     "patterns": [
         "GUOWANG", "SATNET", "CHINA SATNET", "GW-", "HULIANWANG", "JISHU",
     ]},
-    "yinhe":      {"group": "yinhe",        "patterns": ["GALAXYSPACE", "YINHE"]},
+    # yinhe / lynk: CelesTrak GROUP entry exists but is incomplete (newer
+    # launches missing for weeks). force_spacetrack=True asks the workflow's
+    # ST fallback step to *always* re-query for these slugs, regardless of
+    # whether CelesTrak returned >0 records, so the union is published.
+    "yinhe":      {"group": "yinhe",        "patterns": ["GALAXYSPACE", "YINHE"],
+                   "force_spacetrack": True},
     "jilin":      {"group": "jilin-1",      "patterns": ["JILIN"]},
     "tianqi":     {"group": "tianqi",       "patterns": ["TIANQI"]},
     "yaogan":     {"group": "yaogan",       "patterns": ["YAOGAN"]},
     "bluewalker": {"group": "ast",          "patterns": ["BLUEWALKER"]},
-    "lynk":       {"group": "other-comm",   "patterns": ["LYNK"]},
+    "lynk":       {"group": "other-comm",   "patterns": ["LYNK"],
+                   "force_spacetrack": True},
     "telesat":    {"group": "telesat",      "patterns": ["TELESAT"]},
+    # Newly added — parity with satellitemap.space menu. CelesTrak does not
+    # publish a dedicated group for any of these yet, so they fall through
+    # to the OBJECT_NAME pattern fallback in fetch_celestrak.py and (when
+    # patterns yield 0) the Space-Track gp fetch in refresh.yml.
+    "e-space":    {"group": "e-space",      "patterns": ["ESPACE"]},
+    "geespace":   {"group": "geespace",     "patterns": ["GEESAT", "GEESPACE"]},
+    "satelog":    {"group": "satelog",      "patterns": ["SATELOG"]},
+    "parus":      {"group": "parus",        "patterns": ["PARUS"]},
+    "strela-1m":  {"group": "strela-1m",    "patterns": ["STRELA-1M"]},
+    "strela-3":   {"group": "strela-3",     "patterns": ["STRELA-3"]},
 }
 
 ALL_SLUGS = sorted(CONSTELLATIONS.keys())
+
+# Slugs whose CelesTrak feed is known-incomplete; the workflow always queries
+# Space-Track for them and *unions* the results into the on-disk JSON.
+FORCE_SPACETRACK_SLUGS = sorted(
+    slug for slug, cfg in CONSTELLATIONS.items() if cfg.get("force_spacetrack")
+)
