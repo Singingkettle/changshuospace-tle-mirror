@@ -1,0 +1,146 @@
+name: refresh-tle-mirror
+
+# Runs every 6 hours. Manual dispatch is also enabled for catch-up.
+on:
+  schedule:
+    - cron: "15 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      include_satcat:
+        description: "Force SATCAT refresh on this run"
+        required: false
+        default: "false"
+
+permissions:
+  contents: write   # needed to publish/update the rolling 'latest' Release
+
+concurrency:
+  group: refresh-tle-mirror
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: fetcher/requirements.txt
+
+      - name: Install deps
+        run: pip install -r fetcher/requirements.txt
+
+      - name: Decide whether to refresh SATCAT
+        id: satcat
+        run: |
+          set -e
+          # SATCAT once per UTC day at the 00:xx slot, plus on demand.
+          HOUR_UTC=$(date -u +%H)
+          MANUAL='${{ github.event.inputs.include_satcat }}'
+          if [ "$HOUR_UTC" = "00" ] || [ "$MANUAL" = "true" ]; then
+            echo "do_satcat=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "do_satcat=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch CelesTrak (all constellations)
+        working-directory: fetcher
+        run: python fetch_celestrak.py
+
+      - name: Detect empty CelesTrak groups (need ST fallback)
+        id: empty_groups
+        working-directory: fetcher
+        run: |
+          set -e
+          python - <<'PY'
+          import json, os, pathlib
+          data = pathlib.Path('../data')
+          empty = []
+          for f in sorted(data.glob('*.json')):
+              if f.name == 'manifest.json':
+                  continue
+              try:
+                  recs = json.loads(f.read_text() or '[]')
+              except Exception:
+                  recs = []
+              if not recs:
+                  empty.append(f.stem)
+          out = os.environ.get('GITHUB_OUTPUT')
+          with open(out, 'a') as fh:
+              fh.write(f"empty_slugs={' '.join(empty)}\n")
+          print('empty:', empty)
+          PY
+
+      - name: Fetch Space-Track GP for empty groups
+        if: steps.empty_groups.outputs.empty_slugs != ''
+        working-directory: fetcher
+        env:
+          SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
+          SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
+        run: |
+          python fetch_spacetrack.py gp ${{ steps.empty_groups.outputs.empty_slugs }}
+
+      - name: Fetch Space-Track SATCAT (daily)
+        if: steps.satcat.outputs.do_satcat == 'true'
+        working-directory: fetcher
+        env:
+          SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
+          SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
+        run: python fetch_spacetrack.py satcat
+
+      - name: Build manifest
+        id: build
+        working-directory: fetcher
+        env:
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPO:  ${{ github.event.repository.name }}
+          GH_TAG:   latest
+        run: python build_release.py
+
+      - name: Upload to rolling 'latest' Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          # Delete and recreate the 'latest' release so asset names stay clean.
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest \
+            --title "TLE mirror (rolling)" \
+            --notes "Generated $(date -u +%FT%TZ) by GitHub Actions." \
+            --target "${GITHUB_SHA}" \
+            data/*.json
+
+      - name: Tag a daily snapshot (UTC)
+        if: steps.satcat.outputs.do_satcat == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          DAY_TAG=$(date -u +%Y%m%d)
+          gh release delete "$DAY_TAG" --yes --cleanup-tag || true
+          gh release create "$DAY_TAG" \
+            --title "TLE mirror $DAY_TAG" \
+            --notes "Daily snapshot for $DAY_TAG (UTC)." \
+            --target "${GITHUB_SHA}" \
+            data/*.json
+
+      - name: Prune snapshots older than 7 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          CUTOFF=$(date -u -d '7 days ago' +%Y%m%d)
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | \
+            grep -E '^[0-9]{8}$' | while read TAG; do
+              if [ "$TAG" -lt "$CUTOFF" ]; then
+                echo "delete $TAG"
+                gh release delete "$TAG" --yes --cleanup-tag || true
+              fi
+            done
