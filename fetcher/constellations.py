@@ -15,10 +15,23 @@ CONSTELLATIONS = {
     "oneweb":     {"group": "oneweb",       "patterns": ["ONEWEB"]},
     "kuiper":     {"group": "kuiper",       "patterns": ["KUIPER"]},
     "iridium":    {"group": "iridium-next", "patterns": ["IRIDIUM"]},
-    "globalstar": {"group": "globalstar",   "patterns": ["GLOBALSTAR"]},
-    "orbcomm":    {"group": "orbcomm",      "patterns": ["ORBCOMM"]},
-    "gps":        {"group": "gps-ops",      "patterns": ["NAVSTAR"]},
-    "glonass":    {"group": "glo-ops",      "patterns": ["GLONASS"]},
+    # Legacy MEO/LEO operational constellations: CelesTrak's *-ops groups only
+    # publish currently-active payloads, so retired-but-not-decayed satellites
+    # (Globalstar-1, Orbcomm-1, GPS Block II, GLONASS-M) are missing. We mark
+    # them force_spacetrack=True so refresh.yml ALWAYS unions a Space-Track
+    # OBJECT_NAME~~PATTERN query into the published JSON. The existing patterns
+    # already substring-match all SATCAT names ("NAVSTAR 9 (USA 1)",
+    # "COSMOS 1413 (GLONASS)", "GLOBALSTAR M001", "ORBCOMM FM 1", ...).
+    # Result: in_orbit_count tracks the full SATCAT in-orbit population,
+    # operational_count (JCAT O/OX/AO) keeps the conservative "really working" view.
+    "globalstar": {"group": "globalstar",   "patterns": ["GLOBALSTAR"],
+                   "force_spacetrack": True},
+    "orbcomm":    {"group": "orbcomm",      "patterns": ["ORBCOMM"],
+                   "force_spacetrack": True},
+    "gps":        {"group": "gps-ops",      "patterns": ["NAVSTAR"],
+                   "force_spacetrack": True},
+    "glonass":    {"group": "glo-ops",      "patterns": ["GLONASS"],
+                   "force_spacetrack": True},
     "galileo":    {"group": "galileo",      "patterns": ["GALILEO"]},
     "beidou":     {"group": "beidou",       "patterns": ["BEIDOU"]},
     "planet":     {"group": "planet",       "patterns": ["FLOCK", "DOVE", "SKYSAT"]},
