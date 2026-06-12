@@ -14,6 +14,11 @@ on:
 permissions:
   contents: write   # needed to publish/update the rolling 'latest' Release
 
+env:
+  # GitHub Actions is retiring the Node.js 20 runtime for JavaScript actions.
+  # Opt in early so checkout/setup-python keep running after the forced switch.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: refresh-tle-mirror
   cancel-in-progress: false
@@ -75,7 +80,7 @@ jobs:
                   recs = []
               if not recs:
                   empty.append(f.stem)
-          # Always-augment slugs (yinhe / lynk) — re-query ST so the union of
+          # Always-augment slugs (yinhe / lynk) - re-query ST so the union of
           # CelesTrak + ST gets published.
           for slug in FORCE_SPACETRACK_SLUGS:
               if slug not in empty:
@@ -106,7 +111,7 @@ jobs:
       - name: Fetch JCAT operational status (planet4589)
         working-directory: fetcher
         run: python parse_jcat.py
-        continue-on-error: true   # JCAT outage shouldn't block the TLE release
+        continue-on-error: true   # JCAT outage should not block the TLE release
 
       - name: Build manifest
         id: build
@@ -121,28 +126,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          # Delete and recreate the 'latest' release so asset names stay clean.
-          gh release delete latest --yes --cleanup-tag || true
-          gh release create latest \
-            --title "TLE mirror (rolling)" \
-            --notes "Generated $(date -u +%FT%TZ) by GitHub Actions." \
-            --target "${GITHUB_SHA}" \
-            data/*.json
+          bash fetcher/upload_release_assets.sh \
+            latest \
+            "TLE mirror (rolling)" \
+            "Generated $(date -u +%FT%TZ) by GitHub Actions." \
+            "${GITHUB_SHA}" \
+            data
 
       - name: Tag a daily snapshot (UTC)
         if: steps.satcat.outputs.do_satcat == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
           DAY_TAG=$(date -u +%Y%m%d)
-          gh release delete "$DAY_TAG" --yes --cleanup-tag || true
-          gh release create "$DAY_TAG" \
-            --title "TLE mirror $DAY_TAG" \
-            --notes "Daily snapshot for $DAY_TAG (UTC)." \
-            --target "${GITHUB_SHA}" \
-            data/*.json
+          bash fetcher/upload_release_assets.sh \
+            "$DAY_TAG" \
+            "TLE mirror $DAY_TAG" \
+            "Daily snapshot for $DAY_TAG (UTC)." \
+            "${GITHUB_SHA}" \
+            data
 
       - name: Prune snapshots older than 7 days
         env:
