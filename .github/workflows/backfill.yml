@@ -1,18 +1,18 @@
 name: backfill-gp-history
 
-# Gradual Space-Track gp_history backfill. Runs once per day; each run
-# advances the cursor a couple of EPOCH-day windows and publishes the
-# results as a rolling Release asset. Keeps request volume well under
-# Space-Track account limits (≤2 windows/day, 25s spacing).
+# Gradual Space-Track gp_history backfill. Runs every 6 hours; each run
+# advances the cursor a few EPOCH-day windows and publishes the results
+# as a rolling Release asset. 4 runs × 3 windows = 12 gp_history queries
+# per day with 25s spacing — well under Space-Track account limits.
 on:
   schedule:
-    - cron: "40 3 * * *"   # 03:40 UTC daily
+    - cron: "40 3,9,15,21 * * *"   # every 6h at :40 UTC
   workflow_dispatch:
     inputs:
       days_per_run:
         description: "EPOCH-day windows to fetch this run"
         required: false
-        default: "2"
+        default: "3"
       start:
         description: "Override start date YYYY-MM-DD (first run only)"
         required: false
@@ -74,7 +74,7 @@ jobs:
         env:
           SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
           SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
-          BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '2' }}
+          BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '3' }}
           BACKFILL_START: ${{ github.event.inputs.start || '2026-02-27' }}
           BACKFILL_END: ${{ github.event.inputs.end || '2026-06-15' }}
           BACKFILL_BETWEEN_SECONDS: "25"
