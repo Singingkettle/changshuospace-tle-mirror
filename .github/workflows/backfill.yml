@@ -1,0 +1,100 @@
+name: backfill-gp-history
+
+# Gradual Space-Track gp_history backfill. Runs once per day; each run
+# advances the cursor a couple of EPOCH-day windows and publishes the
+# results as a rolling Release asset. Keeps request volume well under
+# Space-Track account limits (≤2 windows/day, 25s spacing).
+on:
+  schedule:
+    - cron: "40 3 * * *"   # 03:40 UTC daily
+  workflow_dispatch:
+    inputs:
+      days_per_run:
+        description: "EPOCH-day windows to fetch this run"
+        required: false
+        default: "2"
+      start:
+        description: "Override start date YYYY-MM-DD (first run only)"
+        required: false
+        default: ""
+      end:
+        description: "Override end date YYYY-MM-DD"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: backfill-gp-history
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: fetcher/requirements.txt
+
+      - name: Install deps
+        run: pip install -r fetcher/requirements.txt
+
+      - name: Restore cursor + previous backfill assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          mkdir -p data/backfill
+          # Pull previous cursor / assets from the rolling backfill release
+          # if it exists; ignore failures on the very first run.
+          gh release download backfill-latest \
+            --pattern 'backfill_cursor.json' \
+            --pattern 'manifest.json' \
+            --pattern '*.jsonl.gz' \
+            --dir data/backfill \
+            --clobber 2>/dev/null || true
+          if [ -f data/backfill/backfill_cursor.json ]; then
+            cp data/backfill/backfill_cursor.json data/backfill_cursor.json
+            echo "restored cursor: $(cat data/backfill_cursor.json)"
+          fi
+
+      - name: Run backfill window(s)
+        working-directory: fetcher
+        env:
+          SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
+          SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
+          BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '2' }}
+          BACKFILL_START: ${{ github.event.inputs.start || '2026-02-27' }}
+          BACKFILL_END: ${{ github.event.inputs.end || '2026-06-15' }}
+          BACKFILL_BETWEEN_SECONDS: "25"
+        run: python backfill_gp_history.py
+
+      - name: Stage cursor into release dir
+        run: |
+          mkdir -p data/backfill
+          if [ -f data/backfill_cursor.json ]; then
+            cp data/backfill_cursor.json data/backfill/backfill_cursor.json
+          fi
+          ls -la data/backfill || true
+
+      - name: Publish rolling backfill-latest Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash fetcher/upload_release_assets.sh \
+            backfill-latest \
+            "GP history backfill (rolling)" \
+            "Generated $(date -u +%FT%TZ) by GitHub Actions backfill workflow." \
+            "${GITHUB_SHA}" \
+            data/backfill
