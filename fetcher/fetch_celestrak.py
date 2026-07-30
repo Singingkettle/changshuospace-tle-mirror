@@ -22,8 +22,13 @@ from tle_synthesizer import fill_missing_tle_lines
 
 CELESTRAK_GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
 THROTTLE_SEC = 5
-TIMEOUT = 60
-RETRIES = 3
+# Fail fast: when CelesTrak is degraded, long timeouts here can eat the
+# whole hourly job (observed 2026-07-30: 31 groups x 3x60s retries ran past
+# the 60-min job timeout, so the Space-Track fallback never fired). A group
+# that fails still gets an empty data/<slug>.json, which routes it to the
+# Space-Track fallback step.
+TIMEOUT = 15
+RETRIES = 2
 USER_AGENT = "changshuospace-tle-mirror/1 (+https://github.com)"
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
