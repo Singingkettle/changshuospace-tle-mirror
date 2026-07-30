@@ -1,9 +1,10 @@
 name: refresh-tle-mirror
 
-# Runs every 6 hours. Manual dispatch is also enabled for catch-up.
+# Runs hourly (CelesTrak group queries are once-per-hour compliant).
+# Manual dispatch is also enabled for catch-up.
 on:
   schedule:
-    - cron: "15 */6 * * *"
+    - cron: "15 * * * *"
   workflow_dispatch:
     inputs:
       include_satcat:
