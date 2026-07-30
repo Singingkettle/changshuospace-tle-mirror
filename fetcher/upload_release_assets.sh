@@ -53,14 +53,20 @@ upload_one() {
 
 ensure_release
 
-mapfile -t ASSETS < <(find "$DATA_DIR" -maxdepth 1 -type f -name "*.json" ! -name "manifest.json" | sort)
+mapfile -t ASSETS < <(
+  find "$DATA_DIR" -maxdepth 1 -type f \( \
+    -name "*.jsonl.gz" -o \
+    \( -name "*.json" ! -name "manifest.json" \) \
+  \) | sort
+)
 if [[ "${#ASSETS[@]}" -eq 0 ]]; then
-  echo "no JSON assets found in ${DATA_DIR}" >&2
+  echo "no backfill assets (*.jsonl.gz / *.json) found in ${DATA_DIR}" >&2
   exit 68
 fi
 
-# Upload data assets first. Only publish the manifest after every referenced
-# asset has uploaded successfully, so clients never consume a half-new release.
+# Upload data assets first (jsonl.gz day files + cursor). Only publish the
+# manifest after every referenced asset has uploaded successfully, so clients
+# never consume a half-new release.
 for asset in "${ASSETS[@]}"; do
   upload_one "$asset"
 done
