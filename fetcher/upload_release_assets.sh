@@ -27,11 +27,35 @@ if [[ ! -s "$MANIFEST" ]]; then
 fi
 
 ensure_release() {
-  if gh release view "$TAG" >/dev/null 2>&1; then
-    gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --target "$TARGET_SHA"
-  else
-    gh release create "$TAG" --title "$TITLE" --notes "$NOTES" --target "$TARGET_SHA"
-  fi
+  local attempt=1
+  while true; do
+    if gh release view "$TAG" >/dev/null 2>&1; then
+      # Metadata-only refresh (title/notes/target). GitHub intermittently
+      # answers this PATCH with 403 "Resource not accessible by integration"
+      # even though the token has contents:write (observed 2026-07-31, run
+      # 30621946641). The release and its assets are unaffected, so after the
+      # retries degrade to a warning instead of failing the whole refresh.
+      if gh release edit "$TAG" --title "$TITLE" --notes "$NOTES" --target "$TARGET_SHA"; then
+        return 0
+      fi
+      if [[ "$attempt" -ge 3 ]]; then
+        echo "WARN: 'gh release edit $TAG' failed ${attempt} times; keeping existing release metadata and continuing with asset upload" >&2
+        return 0
+      fi
+    else
+      if gh release create "$TAG" --title "$TITLE" --notes "$NOTES" --target "$TARGET_SHA"; then
+        return 0
+      fi
+      # Without a release the asset uploads cannot succeed, so creation
+      # failures stay fatal -- but give transient API errors a chance first.
+      if [[ "$attempt" -ge 3 ]]; then
+        echo "failed to create release ${TAG} after ${attempt} attempts" >&2
+        return 1
+      fi
+    fi
+    sleep $((attempt * 5))
+    attempt=$((attempt + 1))
+  done
 }
 
 upload_one() {
