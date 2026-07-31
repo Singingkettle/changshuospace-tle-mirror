@@ -100,9 +100,13 @@ def fetch_gp_for_slug(session: requests.Session, slug: str) -> List[Dict]:
     patterns = conf.get("patterns") or [slug.upper()]
     by_norad: Dict[int, Dict] = {}
     for pattern in patterns:
-        # latest GP per object: orderby EPOCH desc + group by NORAD_CAT_ID
+        # latest GP per object: orderby EPOCH desc + group by NORAD_CAT_ID.
+        # decay_date/null-val + epoch/>now-30 follow the documented best
+        # practice ("only retrieve propagable ephemerides for on-orbit
+        # objects") and keep the query cheap for the server.
         path = (
             f"/basicspacedata/query/class/gp/OBJECT_NAME/~~{pattern}/"
+            f"decay_date/null-val/epoch/%3Enow-30/"
             f"orderby/EPOCH%20desc/format/json"
         )
         recs = _query(session, path) or []
