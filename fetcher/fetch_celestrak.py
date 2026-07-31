@@ -21,6 +21,13 @@ from constellations import CONSTELLATIONS, ALL_SLUGS
 from tle_synthesizer import fill_missing_tle_lines
 
 CELESTRAK_GP_URL = "https://celestrak.org/NORAD/elements/gp.php"
+# Supplemental GP (operator-derived ephemerides) — fresher than catalog GP for
+# Starlink / OneWeb. Unioned on top of the group feed by newer EPOCH.
+CELESTRAK_SUPGP_URL = "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php"
+SUPGP_FILES = {
+    "starlink": "starlink",
+    "oneweb": "oneweb",
+}
 THROTTLE_SEC = 5
 # Fail fast: when CelesTrak is degraded, long timeouts here can eat the
 # whole hourly job (observed 2026-07-30: 31 groups x 3x60s retries ran past
@@ -34,12 +41,26 @@ USER_AGENT = "changshuospace-tle-mirror/1 (+https://github.com)"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
-def _request(params: Dict[str, str]) -> Optional[List[Dict]]:
+def _epoch_key(rec: Dict) -> str:
+    return str(rec.get("EPOCH") or "")
+
+
+def fetch_supgp(slug: str) -> List[Dict]:
+    """Optional Supplemental GP overlay (Starlink / OneWeb)."""
+    file_id = SUPGP_FILES.get(slug)
+    if not file_id:
+        return []
+    recs = _request_url(CELESTRAK_SUPGP_URL, {"FILE": file_id, "FORMAT": "json"}) or []
+    print(f"[celestrak] {slug}: sup-gp FILE={file_id} -> {len(recs)} records")
+    return recs
+
+
+def _request_url(url: str, params: Dict[str, str]) -> Optional[List[Dict]]:
     last_err = None
     for attempt in range(1, RETRIES + 1):
         try:
             r = requests.get(
-                CELESTRAK_GP_URL,
+                url,
                 params=params,
                 timeout=TIMEOUT,
                 headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
@@ -56,13 +77,17 @@ def _request(params: Dict[str, str]) -> Optional[List[Dict]]:
         except requests.RequestException as exc:
             last_err = str(exc)
         time.sleep(2 ** attempt)
-    print(f"[celestrak] params={params} failed after {RETRIES} retries: {last_err}",
+    print(f"[celestrak] url={url} params={params} failed after {RETRIES} retries: {last_err}",
           file=sys.stderr)
     return None
 
 
+def _request(params: Dict[str, str]) -> Optional[List[Dict]]:
+    return _request_url(CELESTRAK_GP_URL, params)
+
+
 def fetch_group(slug: str, conf: Dict) -> List[Dict]:
-    """Fetch by group slug, then patterns, then return whatever we got."""
+    """Fetch by group slug, then patterns, then SupGP overlay for freshness."""
     by_norad: Dict[int, Dict] = {}
     group = conf.get("group")
     if group:
@@ -84,6 +109,26 @@ def fetch_group(slug: str, conf: Dict) -> List[Dict]:
                     by_norad[int(nid)] = r
         if by_norad:
             print(f"[celestrak] {slug}: patterns -> {len(by_norad)} records")
+
+    # Overlay Supplemental GP: prefer newer EPOCH for the same NORAD.
+    if slug in SUPGP_FILES:
+        time.sleep(THROTTLE_SEC)
+        replaced = 0
+        added = 0
+        for r in fetch_supgp(slug):
+            nid = r.get("NORAD_CAT_ID")
+            if not nid:
+                continue
+            nid = int(nid)
+            prev = by_norad.get(nid)
+            if prev is None:
+                by_norad[nid] = r
+                added += 1
+            elif _epoch_key(r) > _epoch_key(prev):
+                by_norad[nid] = r
+                replaced += 1
+        if replaced or added:
+            print(f"[celestrak] {slug}: sup-gp overlay replaced={replaced} added={added}")
 
     if not by_norad:
         print(f"[celestrak] {slug}: NO DATA")
