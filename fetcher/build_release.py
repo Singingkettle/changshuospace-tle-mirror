@@ -56,6 +56,7 @@ def main() -> int:
 
     groups: Dict[str, Dict] = {}
     satcat_meta = None
+    decays_meta = None
     jcat_meta = None
     assets: List[str] = []
 
@@ -77,6 +78,9 @@ def main() -> int:
         if slug == "satcat":
             meta["source"] = "spacetrack"
             satcat_meta = meta
+        elif slug == "decays":
+            meta["source"] = "spacetrack"
+            decays_meta = meta
         elif slug == "jcat_status":
             meta["source"] = "planet4589"
             # record_count for dict-shaped payloads
@@ -106,6 +110,8 @@ def main() -> int:
     }
     if satcat_meta is not None:
         manifest["satcat"] = satcat_meta
+    if decays_meta is not None:
+        manifest["decays"] = decays_meta
     if jcat_meta is not None:
         manifest["jcat_status"] = jcat_meta
 
@@ -116,7 +122,8 @@ def main() -> int:
 
     print(f"[build_release] manifest -> {MANIFEST_PATH}")
     print(f"[build_release] {len(groups)} groups, "
-          f"satcat={'yes' if satcat_meta else 'no'}")
+          f"satcat={'yes' if satcat_meta else 'no'}, "
+          f"decays={'yes' if decays_meta else 'no'}")
     # Emit list for the workflow step to pick up via $GITHUB_OUTPUT.
     out = os.environ.get("GITHUB_OUTPUT")
     if out:

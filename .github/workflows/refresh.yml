@@ -45,12 +45,39 @@ jobs:
 
       - name: Decide whether to refresh SATCAT
         id: satcat
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          # SATCAT once per UTC day at the 00:xx slot, plus on demand.
-          HOUR_UTC=$(date -u +%H)
+          # SATCAT roughly once per UTC day. The old "hour == 00" gate never
+          # fired in practice because GitHub cron schedules are delayed or
+          # skipped unpredictably (observed: no run landed in the 00:xx slot
+          # for days, so SATCAT went stale for months). Instead, look at the
+          # satcat.json asset on the rolling release and refresh whenever it
+          # is missing or older than 20 hours.
           MANUAL='${{ github.event.inputs.include_satcat }}'
-          if [ "$HOUR_UTC" = "00" ] || [ "$MANUAL" = "true" ]; then
+          if [ "$MANUAL" = "true" ]; then
+            echo "do_satcat=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The satcat.json asset on the rolling release survives non-satcat
+          # runs (uploads use --clobber, nothing deletes it), so its
+          # updated_at is the true last-refresh time.
+          UPDATED_AT=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/latest" \
+            --jq '.assets[] | select(.name=="satcat.json") | .updated_at' \
+            2>/dev/null || echo "")
+          if [ -z "$UPDATED_AT" ]; then
+            echo "no satcat.json asset on release -> refresh"
+            echo "do_satcat=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          AGE_H=$(python3 -c "
+          from datetime import datetime, timezone
+          dt = datetime.strptime('$UPDATED_AT', '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+          print(int((datetime.now(timezone.utc) - dt).total_seconds() // 3600))
+          ")
+          echo "satcat.json asset last updated ${AGE_H}h ago ($UPDATED_AT)"
+          if [ "$AGE_H" -ge 20 ]; then
             echo "do_satcat=true" >> "$GITHUB_OUTPUT"
           else
             echo "do_satcat=false" >> "$GITHUB_OUTPUT"
@@ -108,6 +135,17 @@ jobs:
           SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
           SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
         run: python fetch_spacetrack.py satcat
+
+      - name: Fetch Space-Track recent decays (hourly)
+        working-directory: fetcher
+        env:
+          SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
+          SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
+        # Single small SATCAT query (DECAY > now-45d). Without this the GP
+        # feeds (which filter decay_date/null-val per Space-Track best
+        # practice) never deliver decay information downstream.
+        run: python fetch_spacetrack.py decays
+        continue-on-error: true   # a missed decay cycle is fine; next hour catches up
 
       - name: Fetch JCAT operational status (planet4589)
         working-directory: fetcher

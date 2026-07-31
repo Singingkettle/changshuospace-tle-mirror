@@ -1,8 +1,15 @@
 """
 Pull from Space-Track.org as fallback / SATCAT primary.
 
-Two modes:
+Three modes:
   * `python fetch_spacetrack.py satcat` — full SATCAT JSON (1×/day)
+  * `python fetch_spacetrack.py decays` — SATCAT rows for objects decayed
+    within the last DECAY_WINDOW_DAYS (small payload, safe to run hourly).
+    This is the ONLY feed that carries authoritative decay dates: the GP
+    queries below intentionally filter `decay_date/null-val` (per the
+    Space-Track "propagable ephemerides" best practice), so without this
+    asset decayed objects silently vanish from the mirror and downstream
+    DBs never learn they re-entered.
   * `python fetch_spacetrack.py gp <slug> [<slug> ...]` — query GP class for
     constellations CelesTrak couldn't cover (rare; only used when
     fetch_celestrak.py wrote a 0-record file).
@@ -33,6 +40,10 @@ TIMEOUT = 180
 USER_AGENT = "changshuospace-tle-mirror/1 (+https://github.com)"
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+
+# Look-back window for the `decays` mode. 45 days overlaps generously with
+# the hourly cadence, so a few missed cycles never lose a re-entry.
+DECAY_WINDOW_DAYS = 45
 
 
 def _login() -> Optional[requests.Session]:
@@ -92,6 +103,23 @@ def fetch_satcat(session: requests.Session) -> List[Dict]:
     return data
 
 
+def fetch_recent_decays(session: requests.Session) -> List[Dict]:
+    """SATCAT records of objects that decayed in the last N days.
+
+    A single cheap request (typically a few hundred rows), so running it
+    on every hourly cycle stays far below the 30 req/min / 300 req/hr
+    limits. The DECAY field of the satcat class is the authoritative
+    re-entry date per https://www.space-track.org/documentation#api.
+    """
+    path = (f"/basicspacedata/query/class/satcat/"
+            f"DECAY/%3Enow-{DECAY_WINDOW_DAYS}/"
+            f"orderby/DECAY%20desc/format/json")
+    print(f"[spacetrack] fetching decays (last {DECAY_WINDOW_DAYS} days)...")
+    data = _query(session, path) or []
+    print(f"[spacetrack] decays -> {len(data)} records")
+    return data
+
+
 def fetch_gp_for_slug(session: requests.Session, slug: str) -> List[Dict]:
     conf = CONSTELLATIONS.get(slug)
     if not conf:
@@ -138,6 +166,19 @@ def main() -> int:
             (DATA_DIR / "satcat.json").write_text(
                 json.dumps(records, ensure_ascii=False, separators=(",", ":"))
             )
+        elif mode == "decays":
+            records = fetch_recent_decays(session)
+            # Only publish a non-empty asset: an empty list would usually
+            # mean the query failed, and clobbering a good previous asset
+            # with [] would hide real decays from the puller for an hour.
+            if records:
+                (DATA_DIR / "decays.json").write_text(
+                    json.dumps(records, ensure_ascii=False,
+                               separators=(",", ":"))
+                )
+            else:
+                print("[spacetrack] decays returned 0 records; "
+                      "not writing decays.json", file=sys.stderr)
         elif mode == "gp":
             slugs = sys.argv[2:]
             if not slugs:
