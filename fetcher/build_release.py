@@ -60,14 +60,24 @@ def main() -> int:
     jcat_meta = None
     assets: List[str] = []
 
+    missing_sha: List[str] = []
+
     for path in sorted(DATA_DIR.glob("*.json")):
         if path.name == "manifest.json":
+            continue
+        sha = _sha256(path)
+        if not sha:
+            # Should never happen unless _sha256 itself fails. Project policy
+            # 2026-04-24: refuse to publish a release that contains an asset
+            # without a sha256 -- the China-side puller will reject it anyway,
+            # better to fail the workflow loudly here.
+            missing_sha.append(path.name)
             continue
         meta = {
             "url": URL_TEMPLATE.format(
                 owner=owner, repo=repo, tag=tag, asset=path.name
             ),
-            "sha256": _sha256(path),
+            "sha256": sha,
             "size_bytes": path.stat().st_size,
             "record_count": _record_count(path),
             "fetched_at_utc": datetime.fromtimestamp(
@@ -129,6 +139,15 @@ def main() -> int:
     if out:
         with open(out, "a") as f:
             f.write(f"asset_list<<EOF\n" + "\n".join(assets) + "\nEOF\n")
+
+    if missing_sha:
+        print(
+            f"[build_release] FATAL: {len(missing_sha)} asset(s) failed sha256 "
+            f"computation: {missing_sha}",
+            file=sys.stderr,
+        )
+        return 2
+
     return 0
 
 
