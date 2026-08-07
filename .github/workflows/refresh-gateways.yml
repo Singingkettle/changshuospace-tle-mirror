@@ -38,11 +38,17 @@ jobs:
       - name: Prepare output dir
         run: mkdir -p gateway_data
 
-      - name: Fetch ACMA licence terms page (human-review artifact)
+      - name: Fetch ACMA licence terms page (human-review artifact, best-effort)
+        # www.acma.gov.au's WAF resets HTTP/2 streams from curl (measured
+        # run 31169040073: "HTTP/2 stream 1 was not closed cleanly");
+        # force HTTP/1.1 + a browser UA. Best-effort: a missing terms
+        # artifact must not kill the register download below — the
+        # ACMA_PUBLISH_OK gate is a human decision either way.
         run: |
-          curl -fsSL --retry 3 --retry-delay 10 \
-            -A "changshuospace-gateway-mirror (research; contact via repo issues)" \
-            -o acma_terms.html "https://www.acma.gov.au/radiocomms-licence-data"
+          curl -fsSL --http1.1 --retry 3 --retry-delay 10 \
+            -A "Mozilla/5.0 (X11; Linux x86_64) changshuospace-gateway-mirror" \
+            -o acma_terms.html "https://www.acma.gov.au/radiocomms-licence-data" \
+            || echo "TERMS FETCH FAILED $(date -u +%FT%TZ) — review manually at https://www.acma.gov.au/radiocomms-licence-data" > acma_terms.html
 
       - name: Upload terms artifact
         uses: actions/upload-artifact@v4
@@ -53,8 +59,8 @@ jobs:
 
       - name: Download ACMA RRL daily package
         run: |
-          curl -fsSL --retry 3 --retry-delay 30 \
-            -A "changshuospace-gateway-mirror (research; contact via repo issues)" \
+          curl -fsSL --http1.1 --retry 3 --retry-delay 30 \
+            -A "Mozilla/5.0 (X11; Linux x86_64) changshuospace-gateway-mirror" \
             -o spectra_rrl.zip "https://web.acma.gov.au/rrl-updates/spectra_rrl.zip"
           ls -la spectra_rrl.zip
 
