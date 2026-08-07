@@ -1,0 +1,102 @@
+name: refresh-gateways
+
+# Weekly ground-station register refresh (aux-data-refresh-plan §3.1).
+# Own tag (gateways-latest) + own manifest so weekly gateway assets never
+# mix into the hourly TLE 'latest' stream. Publication of ACMA-derived rows
+# is gated behind the repository variable ACMA_PUBLISH_OK: until a human has
+# read the ACMA Licence Usage Conditions (uploaded as an artifact by every
+# run), only a coordinate-free preview is published for that source.
+on:
+  schedule:
+    - cron: "20 2 * * 1"   # Mondays 02:20 UTC — well after ACMA's daily 6am AEST build
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: refresh-gateways
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Prepare output dir
+        run: mkdir -p gateway_data
+
+      - name: Fetch ACMA licence terms page (human-review artifact)
+        run: |
+          curl -fsSL --retry 3 --retry-delay 10 \
+            -A "changshuospace-gateway-mirror (research; contact via repo issues)" \
+            -o acma_terms.html "https://www.acma.gov.au/radiocomms-licence-data"
+
+      - name: Upload terms artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acma-licence-usage-conditions
+          path: acma_terms.html
+          retention-days: 90
+
+      - name: Download ACMA RRL daily package
+        run: |
+          curl -fsSL --retry 3 --retry-delay 30 \
+            -A "changshuospace-gateway-mirror (research; contact via repo issues)" \
+            -o spectra_rrl.zip "https://web.acma.gov.au/rrl-updates/spectra_rrl.zip"
+          ls -la spectra_rrl.zip
+
+      - name: Extract ACMA gateways (publication gated)
+        env:
+          ACMA_PUBLISH_OK: ${{ vars.ACMA_PUBLISH_OK }}
+        run: |
+          FLAG=""
+          if [ "${ACMA_PUBLISH_OK}" = "1" ]; then FLAG="--publish-ok"; fi
+          python fetcher/fetch_gateways_acma.py \
+            --zip spectra_rrl.zip \
+            --terms-html acma_terms.html \
+            --out gateway_data/gateways_acma.json \
+            ${FLAG}
+          rm -f spectra_rrl.zip   # raw register is NEVER published
+
+      - name: Fetch AWS Ground Station locations
+        run: |
+          curl -fsSL --retry 3 --retry-delay 10 \
+            -o aws_locations.html "https://aws.amazon.com/ground-station/locations/"
+          python fetcher/fetch_gateways_aws.py \
+            --html aws_locations.html \
+            --out gateway_data/gateways_aws.json
+
+      - name: RSM NZ poller (skeleton — no-ops until station IDs configured)
+        run: |
+          python fetcher/fetch_gateways_rsm.py \
+            --out gateway_data/gateways_rsm.json
+
+      - name: Build manifest (sha256-mandatory)
+        env:
+          GH_OWNER: ${{ github.repository_owner }}
+          GH_REPO: ${{ github.event.repository.name }}
+          GH_TAG: gateways-latest
+        run: python fetcher/build_gateways_release.py
+
+      - name: Publish rolling gateways-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=gateways-latest
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "Gateway registers (rolling)" \
+              --notes "Weekly slim extracts of public ground-station registers. See fetcher/fetch_gateways_*.py for provenance and licence gating."
+          gh release upload "$TAG" gateway_data/*.json --clobber
