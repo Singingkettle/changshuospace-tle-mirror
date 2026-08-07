@@ -80,7 +80,7 @@ jobs:
       - name: Fetch AWS Ground Station locations
         run: |
           curl -fsSL --retry 3 --retry-delay 10 \
-            -o aws_locations.html "https://aws.amazon.com/ground-station/locations/"
+            -o aws_locations.html "https://docs.aws.amazon.com/ground-station/latest/ug/aws-ground-station-antenna-locations.html"
           python fetcher/fetch_gateways_aws.py \
             --html aws_locations.html \
             --out gateway_data/gateways_aws.json

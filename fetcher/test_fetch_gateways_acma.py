@@ -89,3 +89,25 @@ def test_preview_withholds_rows(tmp_path):
     assert "rows" not in doc
     assert doc["n_rows"] == 3          # counts visible, coordinates withheld
     assert "WITHHELD" in doc["publication"]
+
+
+def test_aws_table_parser():
+    from fetch_gateways_aws import parse_locations
+    html = """<html><body><table>
+    <tr><th>Ground Station Name</th><th>Ground Station Location</th>
+        <th>AWS Region Name</th><th>AWS Region Code</th><th>Notes</th></tr>
+    <tr><td>Ohio 1</td><td>Ohio, USA</td><td>US East (Ohio)</td>
+        <td>us-east-2</td><td></td></tr>
+    <tr><td>Dubbo 1</td><td>Dubbo, Australia</td><td>Asia Pacific (Sydney)</td>
+        <td>ap-southeast-2</td><td>Not physically located in an AWS region</td></tr>
+    </table></body></html>"""
+    rows = parse_locations(html)
+    assert len(rows) == 2
+    assert rows[0]["station"] == "Ohio 1" and rows[0]["aws_region_code"] == "us-east-2"
+    assert rows[1]["city"] == "Dubbo, Australia"
+    assert "Not physically" in rows[1]["notes"]
+
+
+def test_aws_wrong_table_yields_empty():
+    from fetch_gateways_aws import parse_locations
+    assert parse_locations("<table><tr><th>Other</th></tr><tr><td>x</td></tr></table>") == []
