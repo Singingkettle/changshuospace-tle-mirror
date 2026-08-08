@@ -38,7 +38,15 @@ BACKFILL_DIR = DATA_DIR / "backfill"
 CURSOR_PATH = DATA_DIR / "backfill_cursor.json"
 
 DEFAULT_START = os.environ.get("BACKFILL_START", "2026-02-27")
-DEFAULT_END = os.environ.get("BACKFILL_END", "2026-06-15")
+# Extended 2026-08-08 from 2026-06-15: measured epoch-day coverage shows
+# the region 2026-06-08..2026-07-30 is SPARSE, not covered — 12k-37k rows/day
+# against 54k-63k in the backfilled region and 84k-116k once the live
+# pipeline densifies at 2026-07-31 (2026-07-25 holds just 18 rows). Stopping
+# at 06-15 would have declared the job complete with that sparse band left
+# as-is. Re-running those days is safe and idempotent: the consumer inserts
+# under a UNIQUE(satellite_id, epoch) index, so existing rows are skipped and
+# only the missing versions land.
+DEFAULT_END = os.environ.get("BACKFILL_END", "2026-07-31")
 DAYS_PER_RUN = int(os.environ.get("BACKFILL_DAYS_PER_RUN", "2"))
 BETWEEN_S = int(os.environ.get("BACKFILL_BETWEEN_SECONDS", "25"))
 WINDOW_HOURS = int(os.environ.get("BACKFILL_WINDOW_HOURS", "24"))
@@ -92,8 +100,13 @@ def _save_cursor(dt: datetime, extra: dict | None = None) -> None:
     CURSOR_PATH.write_text(json.dumps(payload, indent=2))
 
 
-def _query_window(session: requests.Session, start: datetime, end: datetime) -> List[Dict]:
-    """Fetch ALL objects whose EPOCH falls in [start, end)."""
+def _query_window(session: requests.Session, start: datetime,
+                  end: datetime) -> Optional[List[Dict]]:
+    """Fetch ALL objects whose EPOCH falls in [start, end).
+
+    Returns the record list on success (possibly empty for a genuinely empty
+    day), or None when BOTH predicate forms failed — the caller must not
+    advance its cursor on None."""
     # Space-Track GFE requires encoded comparison operators.
     start_s = start.strftime("%Y-%m-%d%%20%H:%M:%S")
     end_s = end.strftime("%Y-%m-%d%%20%H:%M:%S")
@@ -127,7 +140,14 @@ def _query_window(session: requests.Session, start: datetime, end: datetime) -> 
                 return data
         except json.JSONDecodeError as exc:
             print(f"[backfill] JSON decode: {exc}", file=sys.stderr)
-    return []
+    # BOTH predicate forms failed. Returning [] here used to be
+    # indistinguishable from "this day genuinely has no records", and the
+    # caller advanced its cursor either way — so a transient Space-Track
+    # error silently and PERMANENTLY skipped that EPOCH-day. Five days were
+    # lost that way (2026-03-28, 04-14, 04-19, 04-29, 05-03), inside a range
+    # the cursor already reports as done. None means failure; [] still means
+    # a real empty window.
+    return None
 
 
 def _write_window(day_tag: str, records: List[Dict]) -> Path:
@@ -153,6 +173,12 @@ def main() -> int:
 
     window = timedelta(hours=WINDOW_HOURS)
     saved_total = 0
+    # Per-window record counts, published in the manifest so a truncated
+    # window (a 200 response that parses but carries far fewer records than
+    # its neighbours) is auditable after the fact instead of being guessed
+    # at from file sizes.
+    per_window = {}
+    query_failed = None
     try:
         for i in range(DAYS_PER_RUN):
             if cursor >= end:
@@ -162,11 +188,24 @@ def main() -> int:
             print(f"[backfill] window {i+1}/{DAYS_PER_RUN}: "
                   f"[{cursor.isoformat()} → {win_end.isoformat()})")
             records = _query_window(session, cursor, win_end)
+            if records is None:
+                # Query failure, NOT an empty day. Leave the cursor where it
+                # is and stop this run: the next scheduled run re-attempts
+                # the same window. Advancing here is what permanently lost
+                # five EPOCH-days. Stopping (rather than continuing to the
+                # next window) also keeps the cursor a single contiguous
+                # frontier, which is the invariant _load_cursor relies on.
+                print(f"[backfill]   QUERY FAILED for {day_tag} — cursor "
+                      f"stays at {cursor.isoformat()}, will retry next run",
+                      file=sys.stderr)
+                query_failed = day_tag
+                break
             print(f"[backfill]   got {len(records)} records")
             if records:
                 path = _write_window(day_tag, records)
                 print(f"[backfill]   wrote {path} ({path.stat().st_size} bytes)")
                 saved_total += len(records)
+            per_window[day_tag] = len(records)
             cursor = win_end
             _save_cursor(cursor, {"last_window_records": len(records)})
             if i + 1 < DAYS_PER_RUN and cursor < end:
@@ -179,11 +218,20 @@ def main() -> int:
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "next_epoch": cursor.isoformat(),
         "records_this_run": saved_total,
+        "per_window_records": per_window,
+        "query_failed_day": query_failed,
         "files": sorted(p.name for p in BACKFILL_DIR.glob("*.jsonl.gz")),
     }
+    # _write_window is the only other thing that creates this directory, so a
+    # run whose FIRST window fails (or is genuinely empty) would otherwise
+    # crash here with FileNotFoundError instead of reporting the failure.
+    BACKFILL_DIR.mkdir(parents=True, exist_ok=True)
     (BACKFILL_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"[backfill] DONE records={saved_total} next={cursor.isoformat()}")
-    return 0
+    print(f"[backfill] DONE records={saved_total} next={cursor.isoformat()}"
+          + (f" QUERY_FAILED={query_failed}" if query_failed else ""))
+    # A failed window is a real failure: surface it as a non-zero exit so the
+    # run shows red instead of looking like a clean short run.
+    return 3 if query_failed else 0
 
 
 if __name__ == "__main__":

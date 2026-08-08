@@ -14,7 +14,7 @@ on:
         required: false
         default: "3"
       start:
-        description: "Override start date YYYY-MM-DD (first run only)"
+        description: "Re-fetch from this date instead of the saved cursor (YYYY-MM-DD). Use with 'end' + days_per_run to repair a skipped day."
         required: false
         default: ""
       end:
@@ -64,7 +64,16 @@ jobs:
             --pattern '*.jsonl.gz' \
             --dir data/backfill \
             --clobber 2>/dev/null || true
-          if [ -f data/backfill/backfill_cursor.json ]; then
+          # The saved cursor wins UNLESS a manual 'start' override was given.
+          # Without this guard the restore always clobbered the override, so
+          # the documented input was dead code and a skipped EPOCH-day could
+          # never be re-fetched (found 2026-08-08 while repairing five such
+          # days). Day files already on the release are re-downloaded above
+          # and re-uploaded with --clobber, so a repair run cannot lose them.
+          if [ -n "${{ github.event.inputs.start }}" ]; then
+            rm -f data/backfill_cursor.json
+            echo "start override given (${{ github.event.inputs.start }}) — ignoring saved cursor"
+          elif [ -f data/backfill/backfill_cursor.json ]; then
             cp data/backfill/backfill_cursor.json data/backfill_cursor.json
             echo "restored cursor: $(cat data/backfill_cursor.json)"
           fi
@@ -76,7 +85,7 @@ jobs:
           SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
           BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '3' }}
           BACKFILL_START: ${{ github.event.inputs.start || '2026-02-27' }}
-          BACKFILL_END: ${{ github.event.inputs.end || '2026-06-15' }}
+          BACKFILL_END: ${{ github.event.inputs.end || '2026-07-31' }}
           BACKFILL_BETWEEN_SECONDS: "25"
         run: python backfill_gp_history.py
 
