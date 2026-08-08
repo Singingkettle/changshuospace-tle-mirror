@@ -46,7 +46,22 @@ DEFAULT_START = os.environ.get("BACKFILL_START", "2026-02-27")
 # as-is. Re-running those days is safe and idempotent: the consumer inserts
 # under a UNIQUE(satellite_id, epoch) index, so existing rows are skipped and
 # only the missing versions land.
-DEFAULT_END = os.environ.get("BACKFILL_END", "2026-07-31")
+def _rolling_end() -> str:
+    """The frontier chases the live feed instead of stopping at a fixed date.
+
+    A hard-coded end silently converts this job into a permanent successful
+    no-op the day the cursor reaches it — the run exits 0, publishes
+    status=complete, and nothing anywhere says coverage stopped growing. The
+    previous value (2026-07-31) was about four days from doing exactly that.
+
+    today-7d, because Space-Track's gp_history for the last few days is still
+    filling in; asking for it returns partial windows that we would then have
+    to re-ask for.
+    """
+    return (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+
+DEFAULT_END = os.environ.get("BACKFILL_END") or _rolling_end()
 # HARD CLAMP, not a default. BETWEEN_S=25 lets one process sustain
 # 3600/25 = 144 windows/hour, and a window costs 2 GETs when the primary
 # predicate form fails — 289 requests/hour against a published 300/hour
@@ -55,7 +70,13 @@ DEFAULT_END = os.environ.get("BACKFILL_END", "2026-07-31")
 # happening. Clamped at 8: worst case 8x2 GETs + login + logout = 18
 # requests per run.
 _MAX_DAYS_PER_RUN = 8
-DAYS_PER_RUN = max(1, min(int(os.environ.get("BACKFILL_DAYS_PER_RUN", "2")),
+# Default raised 2 -> 8 (the clamp) on 2026-08-08 to finish the measured
+# 2,012-EPOCH-day gap list. This does NOT raise the peak request rate, which
+# is set by BETWEEN_S below: a run does 2 GETs per window spaced 45 s apart
+# either way, so the peak stays 160/hour = 53% of the published ceiling. It
+# only makes each run longer (~6 min instead of ~1.5) and each day cover 32
+# windows instead of 8 — 63 days for the queue instead of 168.
+DAYS_PER_RUN = max(1, min(int(os.environ.get("BACKFILL_DAYS_PER_RUN", "8")),
                           _MAX_DAYS_PER_RUN))
 # Raised 25 -> 40 on 2026-08-08. The clamp above bounds ONE run, but the
 # SUSTAINED hourly rate under continuous dispatch is set here, not by the
@@ -152,6 +173,67 @@ def _save_cursor(dt: datetime, extra: dict | None = None) -> None:
     CURSOR_PATH.write_text(json.dumps(payload, indent=2))
 
 
+QUEUE_PATH = Path(__file__).resolve().parent / "backfill_queue.json"
+
+
+def _load_queue() -> List[Dict]:
+    """Gap-repair segments, consumed after the frontier catches up.
+
+    Definition lives in git (reviewable); only the POSITION is state, and it
+    rides in the cursor asset that already round-trips through the release.
+    A missing or broken queue is not fatal — the frontier is the job's
+    primary duty and must keep running without it.
+    """
+    try:
+        return json.loads(QUEUE_PATH.read_text()).get("segments", [])
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        print(f"[backfill] queue unreadable ({exc}); frontier only",
+              file=sys.stderr)
+        return []
+
+
+def _load_queue_state() -> tuple[int, Optional[datetime]]:
+    """(segment index, next epoch-day within it). Defaults to the start."""
+    if not CURSOR_PATH.exists():
+        return 0, None
+    try:
+        d = json.loads(CURSOR_PATH.read_text())
+        nxt = d.get("queue_next")
+        return int(d.get("queue_index", 0)), (
+            datetime.fromisoformat(nxt) if nxt else None)
+    except Exception:
+        # Unlike the frontier, a lost queue position is harmless: it re-runs
+        # days we already hold, and the consumer's UNIQUE(satellite_id,
+        # epoch) index makes that a no-op. Never block the run for it.
+        return 0, None
+
+
+def _queue_plan(segments: List[Dict], index: int,
+                next_day: Optional[datetime]) -> Optional[tuple[int, datetime, datetime]]:
+    """Resolve (index, day, segment_end) for the next repair day, or None
+    when the whole queue is finished. Skips segments already passed."""
+    while index < len(segments):
+        seg = segments[index]
+        try:
+            seg_start = datetime.fromisoformat(seg["start"] + "T00:00:00")
+            seg_end = datetime.fromisoformat(seg["end"] + "T00:00:00")
+        except Exception:
+            print(f"[backfill] queue segment {index} malformed; skipping",
+                  file=sys.stderr)
+            index += 1
+            next_day = None
+            continue
+        day = next_day or seg_start
+        if day < seg_start or day >= seg_end:
+            index += 1
+            next_day = None
+            continue
+        return index, day, seg_end
+    return None
+
+
 def _query_window(session: requests.Session, start: datetime,
                   end: datetime) -> Optional[List[Dict]]:
     """Fetch ALL objects whose EPOCH falls in [start, end).
@@ -230,10 +312,27 @@ def main() -> int:
     # publish a cursor earlier than the one this run started from.
     global _CURSOR_FLOOR
     _CURSOR_FLOOR = cursor
-    if cursor >= end:
-        print(f"[backfill] cursor {cursor.isoformat()} already past end {end.isoformat()}; done")
-        _save_cursor(cursor, {"status": "complete"})
-        return 0
+    # Frontier first, queue with whatever capacity is left. Once the frontier
+    # reaches the rolling end it only has ~1 window/day of real work, so the
+    # remaining ~31 windows/day would otherwise be thrown away — that spare
+    # capacity is the entire reason the 2,012-day gap list is finishable in
+    # about two months instead of by hand.
+    segments = _load_queue()
+    q_index, q_next = _load_queue_state()
+    frontier_done = cursor >= end
+    if frontier_done:
+        plan = _queue_plan(segments, q_index, q_next)
+        if plan is None:
+            print(f"[backfill] frontier at {cursor.isoformat()} (end {end.isoformat()}) "
+                  f"and the repair queue is empty; nothing to do")
+            _save_cursor(cursor, {"status": "complete",
+                                  "queue_index": len(segments),
+                                  "queue_next": None})
+            return 0
+        q_index, q_day, q_seg_end = plan
+        print(f"[backfill] frontier caught up ({cursor.isoformat()}); working "
+              f"repair segment {q_index} "
+              f"'{segments[q_index].get('label')}' from {q_day.date()}")
 
     session = _login()
     if session is None:
@@ -249,13 +348,25 @@ def main() -> int:
     query_failed = None
     try:
         for i in range(DAYS_PER_RUN):
-            if cursor >= end:
-                break
-            win_end = min(cursor + window, end)
-            day_tag = cursor.strftime("%Y-%m-%d")
-            print(f"[backfill] window {i+1}/{DAYS_PER_RUN}: "
-                  f"[{cursor.isoformat()} → {win_end.isoformat()})")
-            records = _query_window(session, cursor, win_end)
+            if frontier_done:
+                plan = _queue_plan(segments, q_index, q_next)
+                if plan is None:
+                    print("[backfill] repair queue exhausted")
+                    break
+                q_index, q_day, q_seg_end = plan
+                win_start = q_day
+                win_end = min(q_day + window, q_seg_end)
+                label = f"repair[{segments[q_index].get('label')}]"
+            else:
+                if cursor >= end:
+                    break
+                win_start = cursor
+                win_end = min(cursor + window, end)
+                label = "frontier"
+            day_tag = win_start.strftime("%Y-%m-%d")
+            print(f"[backfill] window {i+1}/{DAYS_PER_RUN} {label}: "
+                  f"[{win_start.isoformat()} → {win_end.isoformat()})")
+            records = _query_window(session, win_start, win_end)
             if records is None:
                 # Query failure, NOT an empty day. Leave the cursor where it
                 # is and stop this run: the next scheduled run re-attempts
@@ -274,9 +385,22 @@ def main() -> int:
                 print(f"[backfill]   wrote {path} ({path.stat().st_size} bytes)")
                 saved_total += len(records)
             per_window[day_tag] = len(records)
-            cursor = win_end
-            _save_cursor(cursor, {"last_window_records": len(records)})
-            if i + 1 < DAYS_PER_RUN and cursor < end:
+            if frontier_done:
+                # The frontier does NOT move on a repair day; only the queue
+                # position does. Keeping them separate is what lets a repair
+                # run touch 2001 without the monotonic guard tripping — the
+                # same separation the one-off `start` override relies on.
+                q_next = win_end
+                _save_cursor(cursor, {"last_window_records": len(records),
+                                      "queue_index": q_index,
+                                      "queue_next": q_next.isoformat()})
+            else:
+                cursor = win_end
+                _save_cursor(cursor, {"last_window_records": len(records),
+                                      "queue_index": q_index,
+                                      "queue_next": (q_next.isoformat()
+                                                     if q_next else None)})
+            if i + 1 < DAYS_PER_RUN:
                 time.sleep(BETWEEN_S)
     finally:
         _logout(session)
@@ -288,6 +412,12 @@ def main() -> int:
         "records_this_run": saved_total,
         "per_window_records": per_window,
         "query_failed_day": query_failed,
+        "mode": "repair_queue" if frontier_done else "frontier",
+        "queue_index": q_index,
+        "queue_label": (segments[q_index].get("label")
+                        if frontier_done and q_index < len(segments) else None),
+        "queue_next": q_next.isoformat() if q_next else None,
+        "queue_segments_total": len(segments),
         "files": sorted(p.name for p in BACKFILL_DIR.glob("*.jsonl.gz")),
     }
     # _write_window is the only other thing that creates this directory, so a

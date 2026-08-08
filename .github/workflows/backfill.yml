@@ -12,7 +12,7 @@ on:
       days_per_run:
         description: "EPOCH-day windows to fetch this run (bounded: this is the only input that can reach a published Space-Track limit)"
         required: false
-        default: "3"
+        default: "8"
         type: choice
         options: ["1", "2", "3", "5", "8"]
       start:
@@ -111,9 +111,16 @@ jobs:
         env:
           SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
           SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
-          BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '3' }}
+          BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '8' }}
           BACKFILL_START: ${{ github.event.inputs.start || '2026-02-27' }}
-          BACKFILL_END: ${{ github.event.inputs.end || '2026-07-31' }}
+          # EMPTY on a scheduled run, on purpose: the script then computes a
+          # ROLLING end (today-7d) so the frontier chases the live feed. The
+          # value that used to be here, 2026-07-31, was about four days from
+          # turning this job into a permanently successful no-op — exit 0,
+          # status=complete, coverage silently frozen. A date pinned in the
+          # workflow is invisible from the script, so the script's own
+          # rolling default could never have taken effect while it was set.
+          BACKFILL_END: ${{ github.event.inputs.end || '' }}
           BACKFILL_BETWEEN_SECONDS: "40"
         run: python backfill_gp_history.py
 

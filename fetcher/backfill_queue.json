@@ -1,0 +1,98 @@
+{
+  "_comment": [
+    "Ordered gap-repair queue, consumed by backfill_gp_history.py once the",
+    "forward frontier has caught up to the rolling end (today - 7d).",
+    "",
+    "Ordered by VALUE DENSITY, not chronology. The frontier keeps the live",
+    "boundary closed by itself; this queue exists for the holes behind it.",
+    "",
+    "Every segment below was measured, not assumed — bounded epoch-range",
+    "counts over the 194M-row archive on 2026-08-08. Density is stated as",
+    "DISTINCT SATELLITES per day, not rows: a 2026-08 day has 3x the rows of",
+    "a 2026-05 day while covering FEWER satellites, because Starlink SupGP",
+    "publishes 5-8 versions per object at a shared epoch. Row count is the",
+    "misleading axis and it is why this hole looked like a recovery.",
+    "",
+    "Progress lives in backfill_cursor.json (queue_index / queue_cursor),",
+    "which round-trips through the release asset like the frontier does. The",
+    "queue DEFINITION lives here in git so it is reviewable; only the",
+    "position is state.",
+    "",
+    "Re-running a covered day is safe and cheap on our side: the consumer",
+    "inserts under UNIQUE(satellite_id, epoch), so existing rows are skipped.",
+    "It is NOT free upstream, which is why the segments are bounded to what",
+    "was actually measured as thin."
+  ],
+  "segments": [
+    {
+      "label": "G3-2026-01-outage",
+      "start": "2026-01-20",
+      "end": "2026-02-27",
+      "days": 38,
+      "why": "Total live-path outage: 2026-01-21..27 holds 15-452 rows/day (and the same number of distinct satellites), then 5-17k rows / 5-10k sats/day through 02-23. Unreachable until now: BACKFILL_START was hard-coded to 2026-02-27, so neither the frontier nor a repair run could ever touch it."
+    },
+    {
+      "label": "G4-2017-spring",
+      "start": "2017-03-01",
+      "end": "2017-08-01",
+      "days": 153,
+      "why": "2017-04 holds 4,283 rows for the ENTIRE month (143 rows over 143 distinct satellites per day, 1.01 versions/sat) against 269k in 2017-01 and 197k in 2017-08. The lowest four consecutive months after 1990."
+    },
+    {
+      "label": "probe-2012-11",
+      "start": "2012-11-15",
+      "end": "2012-11-18",
+      "days": 3,
+      "why": "PROBE, not repair. Monthly counts step from 438-480k (2012-01..10) to 270k (2012-11) and stay at 210-273k through 2013. Three days first: if the upstream returns the same thin counts we already hold, the step is real history (fewer objects tracked, or an 18 SPCS publication change) and the 426-day segment below should be dropped rather than run."
+    },
+    {
+      "label": "2012-11-to-2013-step",
+      "start": "2012-11-01",
+      "end": "2014-01-01",
+      "days": 426,
+      "why": "The sustained ~46% density step the probe above tests. Gated on that probe: drop this segment if the probe shows upstream has no more than we do."
+    },
+    {
+      "label": "scattered-thin-months",
+      "start": "1996-01-01",
+      "end": "1996-02-01",
+      "days": 31,
+      "why": "Rolling-median outlier: 82,583 rows vs ~200k neighbours (0.30x)."
+    },
+    {
+      "label": "scattered-1998-03",
+      "start": "1998-03-01",
+      "end": "1998-04-01",
+      "days": 31,
+      "why": "Rolling-median outlier at 0.4x its +-6-month neighbours."
+    },
+    {
+      "label": "scattered-2020-11",
+      "start": "2020-11-01",
+      "end": "2020-12-01",
+      "days": 30,
+      "why": "Rolling-median outlier; recent enough that the objects are still on orbit and the data is still useful for constellation work."
+    },
+    {
+      "label": "scattered-2023-summer",
+      "start": "2023-07-01",
+      "end": "2023-09-01",
+      "days": 62,
+      "why": "Two consecutive months at 30-53% of neighbours, inside the Starlink build-out era."
+    },
+    {
+      "label": "scattered-1986-summer",
+      "start": "1986-07-01",
+      "end": "1986-09-01",
+      "days": 62,
+      "why": "Rolling-median outlier. Lowest value of the set — pre-LEO-constellation era — deliberately ordered last before the multi-year block."
+    },
+    {
+      "label": "G5-2001-to-2004",
+      "start": "2001-05-01",
+      "end": "2004-08-01",
+      "days": 1188,
+      "why": "The largest remaining job and the lowest density-per-request: 39 months at ~72k/month against a ~290k/month baseline, i.e. 75% missing, ~8.5M rows. Ordered last on purpose — everything above closes a hole that current LEO research can actually use, this one closes a hole in the pre-constellation record."
+    }
+  ]
+}
