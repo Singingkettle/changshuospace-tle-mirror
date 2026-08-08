@@ -10,9 +10,11 @@ on:
   workflow_dispatch:
     inputs:
       days_per_run:
-        description: "EPOCH-day windows to fetch this run"
+        description: "EPOCH-day windows to fetch this run (bounded: this is the only input that can reach a published Space-Track limit)"
         required: false
         default: "3"
+        type: choice
+        options: ["1", "2", "3", "5", "8"]
       start:
         description: "Re-fetch from this date instead of the saved cursor (YYYY-MM-DD). Use with 'end' + days_per_run to repair a skipped day."
         required: false
@@ -29,7 +31,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
-  group: backfill-gp-history
+  # ONE credential -> ONE concurrency group. refresh.yml and backfill.yml
+  # authenticate with the same secrets.SPACETRACK_USER, and until 2026-08-08
+  # they sat in separate groups: measured that day, backfill 31232110247 and
+  # refresh 31232171663 overlapped for 3m07s on two runners with one account.
+  # Their Space-Track bursts missed each other only because refresh spends
+  # ~6 min in CelesTrak first — luck, not design.
+  group: spacetrack-account
   cancel-in-progress: false
 
 jobs:
@@ -86,7 +94,7 @@ jobs:
           BACKFILL_DAYS_PER_RUN: ${{ github.event.inputs.days_per_run || '3' }}
           BACKFILL_START: ${{ github.event.inputs.start || '2026-02-27' }}
           BACKFILL_END: ${{ github.event.inputs.end || '2026-07-31' }}
-          BACKFILL_BETWEEN_SECONDS: "25"
+          BACKFILL_BETWEEN_SECONDS: "40"
         run: python backfill_gp_history.py
 
       - name: Stage cursor into release dir

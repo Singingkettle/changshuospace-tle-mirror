@@ -47,8 +47,26 @@ DEFAULT_START = os.environ.get("BACKFILL_START", "2026-02-27")
 # under a UNIQUE(satellite_id, epoch) index, so existing rows are skipped and
 # only the missing versions land.
 DEFAULT_END = os.environ.get("BACKFILL_END", "2026-07-31")
-DAYS_PER_RUN = int(os.environ.get("BACKFILL_DAYS_PER_RUN", "2"))
-BETWEEN_S = int(os.environ.get("BACKFILL_BETWEEN_SECONDS", "25"))
+# HARD CLAMP, not a default. BETWEEN_S=25 lets one process sustain
+# 3600/25 = 144 windows/hour, and a window costs 2 GETs when the primary
+# predicate form fails — 289 requests/hour against a published 300/hour
+# ceiling (96.3%). That was reachable by typing a number into the
+# workflow_dispatch text box, with no code change and nothing unusual
+# happening. Clamped at 8: worst case 8x2 GETs + login + logout = 18
+# requests per run.
+_MAX_DAYS_PER_RUN = 8
+DAYS_PER_RUN = max(1, min(int(os.environ.get("BACKFILL_DAYS_PER_RUN", "2")),
+                          _MAX_DAYS_PER_RUN))
+# Raised 25 -> 40 on 2026-08-08. The clamp above bounds ONE run, but the
+# SUSTAINED hourly rate under continuous dispatch is set here, not by the
+# clamp: 3600/(BETWEEN_S + RETRY_BACKOFF_S) x 2 GETs per window. At 25s+0s
+# that was 288/hour against a published 300/hour ceiling — 96%, i.e. a
+# structural near-miss that no amount of clamping fixes. At 40s+5s it is
+# 160/hour = 53%. Cost to normal operation: 3 windows/run means 120s of
+# sleeps instead of 50s, on a job that runs 4x a day.
+BETWEEN_S = int(os.environ.get("BACKFILL_BETWEEN_SECONDS", "40"))
+# Pause before retrying the second predicate form (see _query_window).
+RETRY_BACKOFF_S = int(os.environ.get("BACKFILL_RETRY_BACKOFF_S", "5"))
 WINDOW_HOURS = int(os.environ.get("BACKFILL_WINDOW_HOURS", "24"))
 
 
@@ -124,7 +142,13 @@ def _query_window(session: requests.Session, start: datetime,
         f"EPOCH/{start.strftime('%Y-%m-%d')}--{end.strftime('%Y-%m-%d')}/"
         f"orderby/EPOCH%20asc/format/json"
     )
-    for candidate in (alt, path):
+    for attempt, candidate in enumerate((alt, path)):
+        if attempt:
+            # The fallback predicate form used to fire back-to-back with zero
+            # delay, doubling this window's request cost at full speed. A
+            # short backoff halves the achievable rate of exactly the failure
+            # mode that gets closest to the hourly limit.
+            time.sleep(RETRY_BACKOFF_S)
         url = f"{BASE_URL}{candidate}"
         try:
             r = session.get(url, timeout=TIMEOUT)

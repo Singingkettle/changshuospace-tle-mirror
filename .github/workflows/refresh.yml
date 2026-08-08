@@ -21,7 +21,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
-  group: refresh-tle-mirror
+  # Shared with backfill.yml: one Space-Track credential, one group. See the
+  # note there. Serialising the two workflows costs nothing (refresh takes
+  # ~7 min, backfill ~4 min, against a 60-min cron) and removes the only
+  # structural way two runners can hit the account at once.
+  group: spacetrack-account
   cancel-in-progress: false
 
 jobs:
