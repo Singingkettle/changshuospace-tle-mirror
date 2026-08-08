@@ -159,6 +159,20 @@ jobs:
           SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
         run: python fetch_spacetrack.py satcat
 
+      - name: Fetch Space-Track full on-orbit GP catalogue (daily)
+        # Gated on the same 20h decision as SATCAT: one extra query per day.
+        # This closes the live path's structural gap — the 31 CelesTrak
+        # groups cap at ~13.6k objects while the catalogue holds ~24.5k on
+        # orbit, so 2 of every 3 objects the consumer flags active were
+        # propagating from TLEs over a week old (ROCKET BODY 0 of 2,205
+        # fresh, DEBRIS 21 of 12,046, measured 2026-08-08).
+        if: steps.satcat.outputs.do_satcat == 'true'
+        working-directory: fetcher
+        env:
+          SPACETRACK_USER: ${{ secrets.SPACETRACK_USER }}
+          SPACETRACK_PASS: ${{ secrets.SPACETRACK_PASS }}
+        run: python fetch_spacetrack.py gp_catalogue
+
       - name: Fetch Space-Track recent decays (hourly)
         working-directory: fetcher
         env:

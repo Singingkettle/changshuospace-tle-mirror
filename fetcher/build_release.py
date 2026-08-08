@@ -30,7 +30,7 @@ SCHEMA_VERSION = 1
 # every 20 hours -- and the China-side puller's per-slug state froze at
 # whatever its last outcome had been. Carry the previous manifest's entry
 # forward for these keys when the file is absent locally.
-CARRY_FORWARD_KEYS = ("satcat", "decays", "jcat_status")
+CARRY_FORWARD_KEYS = ("satcat", "decays", "jcat_status", "gp_catalogue")
 
 # Public download URL pattern for assets attached to a Release tag.
 # Owner / repo / tag are filled at runtime from GH context.
@@ -67,6 +67,7 @@ def main() -> int:
 
     groups: Dict[str, Dict] = {}
     satcat_meta = None
+    gp_catalogue_meta = None
     decays_meta = None
     jcat_meta = None
     assets: List[str] = []
@@ -102,6 +103,13 @@ def main() -> int:
         elif slug == "decays":
             meta["source"] = "spacetrack"
             decays_meta = meta
+        elif slug == "gp_catalogue":
+            # A top-level asset, NOT a constellation group. Without this
+            # branch the else-clause below would file it under groups[] and
+            # the consumer would ingest a 24k-object superset as if it were
+            # one more constellation.
+            meta["source"] = "spacetrack"
+            gp_catalogue_meta = meta
         elif slug == "jcat_status":
             meta["source"] = "planet4589"
             # record_count for dict-shaped payloads
@@ -131,6 +139,8 @@ def main() -> int:
     }
     if satcat_meta is not None:
         manifest["satcat"] = satcat_meta
+    if gp_catalogue_meta is not None:
+        manifest["gp_catalogue"] = gp_catalogue_meta
     if decays_meta is not None:
         manifest["decays"] = decays_meta
     if jcat_meta is not None:
@@ -174,7 +184,8 @@ def main() -> int:
         return "carried" if entry.get("carried_forward") else "yes"
 
     print(f"[build_release] {len(groups)} groups, "
-          f"satcat={_state('satcat')}, decays={_state('decays')}")
+          f"satcat={_state('satcat')}, decays={_state('decays')}, "
+          f"gp_catalogue={_state('gp_catalogue')}")
     # Emit list for the workflow step to pick up via $GITHUB_OUTPUT.
     out = os.environ.get("GITHUB_OUTPUT")
     if out:

@@ -120,6 +120,42 @@ def fetch_recent_decays(session: requests.Session) -> List[Dict]:
     return data
 
 
+def fetch_gp_catalogue(session: requests.Session) -> List[Dict]:
+    """Latest GP for EVERY on-orbit object, not just the configured groups.
+
+    Why this exists. The live path is CelesTrak-group-based and therefore
+    structurally capped: the 31 groups sum to ~13.6k objects, while the
+    catalogue holds ~24.5k on orbit. Measured on the consumer side
+    2026-08-08: of 33,247 objects flagged active, only 13,821 (41.6%) had a
+    TLE inside 7 days — ROCKET BODY 0 of 2,205, DEBRIS 21 of 12,046. Anything
+    rendering or propagating the other 19,426 was using elements over a week
+    old, and SGP4 error grows roughly 1-3 km/day.
+
+    One request. `decay_date/null-val` follows Space-Track's documented
+    guidance to retrieve only propagable ephemerides for on-orbit objects,
+    and `epoch/>now-30` bounds it further. Ordering by EPOCH desc and keeping
+    the first row per NORAD gives the newest elset per object.
+
+    This does NOT replace the group fetches: those carry the constellation
+    membership the consumer keys on. It is a superset published alongside
+    them, so the consumer can refresh objects no group claims.
+    """
+    path = (
+        "/basicspacedata/query/class/gp/decay_date/null-val/"
+        "epoch/%3Enow-30/orderby/EPOCH%20desc/format/json"
+    )
+    print("[spacetrack] fetching FULL on-orbit GP catalogue...")
+    recs = _query(session, path) or []
+    by_norad: Dict[int, Dict] = {}
+    for r in recs:
+        nid = r.get("NORAD_CAT_ID")
+        if nid and int(nid) not in by_norad:
+            by_norad[int(nid)] = r
+    print(f"[spacetrack] gp catalogue -> {len(by_norad)} objects "
+          f"(from {len(recs)} rows)")
+    return list(by_norad.values())
+
+
 def fetch_gp_for_slug(session: requests.Session, slug: str) -> List[Dict]:
     conf = CONSTELLATIONS.get(slug)
     if not conf:
@@ -149,7 +185,8 @@ def fetch_gp_for_slug(session: requests.Session, slug: str) -> List[Dict]:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: fetch_spacetrack.py satcat | gp <slug> [<slug> ...]",
+        print("usage: fetch_spacetrack.py satcat | decays | gp_catalogue "
+              "| gp <slug> [<slug> ...]",
               file=sys.stderr)
         return 1
 
@@ -166,6 +203,19 @@ def main() -> int:
             (DATA_DIR / "satcat.json").write_text(
                 json.dumps(records, ensure_ascii=False, separators=(",", ":"))
             )
+        elif mode == "gp_catalogue":
+            records = fetch_gp_catalogue(session)
+            # Same guard as decays: an empty result almost always means the
+            # query failed, and clobbering a good asset with [] would strand
+            # the consumer on stale elements for a whole cycle.
+            if records:
+                (DATA_DIR / "gp_catalogue.json").write_text(
+                    json.dumps(records, ensure_ascii=False,
+                               separators=(",", ":"))
+                )
+            else:
+                print("[spacetrack] gp catalogue returned 0 records; "
+                      "not writing gp_catalogue.json", file=sys.stderr)
         elif mode == "decays":
             records = fetch_recent_decays(session)
             # Only publish a non-empty asset: an empty list would usually
