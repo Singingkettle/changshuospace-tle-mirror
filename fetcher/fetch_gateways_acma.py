@@ -7,16 +7,39 @@ client -> licence -> device_details -> site, filters to the satellite
 operators and bands we model, and emits a SLIM derived JSON. The raw zip is
 NEVER republished (size + ACMA Licence Usage Conditions).
 
-Publication gate (licence terms, §3.4): the ACMA register download is
-subject to "Licence Usage Conditions" whose redistribution clauses could not
-be reviewed from the deployment network (acma.gov.au is unreachable there —
-403/timeout, measured 2026-08-07). Until a human has read the conditions ON
-THE RUNNER and set the repository variable ``ACMA_PUBLISH_OK=1``, this
-script still runs — proving the parser against live data — but writes only
-``gateways_acma.preview.json`` (row COUNTS and the terms text sha256, zero
-coordinate rows). The workflow uploads the fetched terms page as a build
-artifact for that review. Coordinates here are the register's own licensed
-site coordinates (site.csv LATITUDE/LONGITUDE), never geocoding.
+PUBLICATION IS WITHHELD BY DESIGN (licence determination 2026-08-08)
+--------------------------------------------------------------------
+The ACMA Licence Usage Conditions could NOT be read first-hand from any
+channel available to this project: www.acma.gov.au blocks both the
+deployment network (403/timeout) and the GitHub runner (its WAF resets
+HTTP/2 and, with HTTP/1.1 + a browser UA, still refused — the 2026-08-07
+terms artifact contains only the fallback marker). Secondary sources quote
+the conditions as reserving all rights in the Register and permitting no
+copying "except as expressly provided in the Licence", with the permitted
+purpose tied to spectrum management under the Radiocommunications Act 1992.
+That is (B)-grade evidence, not a first-hand reading.
+
+The mirror repository is PUBLIC, so publishing extracted register rows there
+would be public redistribution. Under unread terms that reserve all rights,
+the conservative option is correct under BOTH hypotheses: if the terms allow
+redistribution we lose almost nothing (see below); if they forbid it we stay
+compliant. So the default is permanent: publish a CHANGE-DETECTION
+FINGERPRINT and aggregate counts — facts ABOUT the register, not a copy of
+it — and never the rows.
+
+What the fingerprint buys: it changes if and only if the set of licensed
+(operator, site) pairs changes, so it tells a human exactly WHEN to go look.
+The follow-up is the project's existing precedent — the 13 Oceania rows
+already in starlink_oceania.geojson were obtained by looking individual
+sites up through ACMA's own public RRL web interface and transcribing them
+with an RRL citation. Detection is automated; transcription stays human and
+per-site.
+
+``--publish-ok`` (repo variable ACMA_PUBLISH_OK=1) is retained ONLY for the
+case where someone obtains a first-hand licence determination that permits
+redistribution. Absent that, leave it unset. Coordinates, when extracted at
+all, are the register's own licensed site coordinates (site.csv
+LATITUDE/LONGITUDE) — never geocoding.
 
 Row schema (one per licensed earth-station site per licensee):
   name, lat, lon, state, site_id, site_precision, licensee, licences
@@ -223,13 +246,34 @@ def main() -> int:
 
     if not args.publish_ok:
         preview = {k: v for k, v in doc.items() if k != "rows"}
+        rows = doc.get("rows", [])
+        # Change-detection fingerprint: a hash over the sorted set of
+        # (operator, site_id) pairs. It is one-way — the register content is
+        # not recoverable from it — but it changes if and only if the set of
+        # licensed sites changes, which is exactly the signal a human needs
+        # to know when to look something up in ACMA's own public RRL UI.
+        key = "\n".join(sorted(f"{r['operator']}|{r['site_id']}" for r in rows))
+        preview["content_fingerprint"] = _sha256_bytes(key.encode())
+        # Aggregate facts ABOUT the register (counts), never its content.
+        by_state = {}
+        for r in rows:
+            st = r.get("state") or "?"
+            by_state[st] = by_state.get(st, 0) + 1
+        preview["n_rows_by_state"] = dict(sorted(by_state.items()))
         preview["publication"] = (
-            "WITHHELD — ACMA Licence Usage Conditions not yet reviewed; "
-            "set repo variable ACMA_PUBLISH_OK=1 after reading the terms "
-            "artifact to publish derived rows.")
+            "WITHHELD BY DESIGN — the ACMA Licence Usage Conditions reserve "
+            "all rights in the Register and could not be read first-hand "
+            "(WAF blocks both this project's network and the runner). This "
+            "repository is public, so extracted rows are never published. "
+            "Watch content_fingerprint: when it changes, look the new sites "
+            "up in ACMA's public RRL interface and transcribe them into "
+            "curated_gateways.json with an RRL citation, as the existing "
+            "Oceania rows were. See the module docstring.")
         out = args.out.with_suffix(".preview.json")
         out.write_text(json.dumps(preview, indent=2, ensure_ascii=False))
-        print(f"[acma] PREVIEW ONLY -> {out} ({doc['n_rows']} rows withheld)")
+        print(f"[acma] fingerprint {preview['content_fingerprint'][:16]} over "
+              f"{doc['n_rows']} sites {doc['n_rows_by_operator']} "
+              f"-> {out} (rows withheld by design)")
         return 0
 
     args.out.write_text(json.dumps(doc, indent=2, ensure_ascii=False))
