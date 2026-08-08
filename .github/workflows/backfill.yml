@@ -66,12 +66,32 @@ jobs:
           mkdir -p data/backfill
           # Pull previous cursor / assets from the rolling backfill release
           # if it exists; ignore failures on the very first run.
+          # Does a release cursor EXIST upstream? Answering this BEFORE the
+          # download is what lets the fetcher tell "first run ever" apart
+          # from "restore failed" — conflating them is how a single failed
+          # download silently rewound the frontier ~100 EPOCH-days and then
+          # published the rewound cursor (found 2026-08-08).
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/backfill-latest" \
+               --jq '.assets[].name' 2>/dev/null | grep -qx 'backfill_cursor.json'; then
+            CURSOR_EXISTS=1
+          else
+            CURSOR_EXISTS=0
+          fi
+          echo "upstream cursor asset present: ${CURSOR_EXISTS}"
+
           gh release download backfill-latest \
             --pattern 'backfill_cursor.json' \
             --pattern 'manifest.json' \
             --pattern '*.jsonl.gz' \
             --dir data/backfill \
             --clobber 2>/dev/null || true
+
+          if [ "${CURSOR_EXISTS}" = "1" ] && [ ! -f data/backfill/backfill_cursor.json ]; then
+            echo "::error::cursor asset exists upstream but could not be downloaded — refusing to run rather than rewind the frontier"
+            echo "BACKFILL_CURSOR_RESTORED=0" >> "$GITHUB_ENV"
+            exit 1
+          fi
+          echo "BACKFILL_CURSOR_RESTORED=${CURSOR_EXISTS}" >> "$GITHUB_ENV"
           # The saved cursor wins UNLESS a manual 'start' override was given.
           # Without this guard the restore always clobbered the override, so
           # the documented input was dead code and a skipped EPOCH-day could

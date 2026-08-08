@@ -19,6 +19,7 @@ import re
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -124,6 +125,81 @@ class BackfillCursorTests(unittest.TestCase):
         self.assertEqual(files, [])
         self.assertEqual(manifest["query_failed_day"], "2026-03-01")
         self.assertIsNone(cursor, "no window succeeded, so no cursor is saved")
+
+
+
+
+class CursorRewindGuardTests(unittest.TestCase):
+    """The frontier must never move backward.
+
+    Measured 2026-08-08: `_load_cursor` fell back to DEFAULT_START on ANY
+    failure, and the workflow's restore step swallowed download failures with
+    `|| true`. One failed `gh release download` therefore resumed the sweep at
+    2026-02-27, re-queried ~100 finished EPOCH-days, and PUBLISHED that
+    rewound cursor — the repair-run guard does not apply because a scheduled
+    run passes no `start` override. Reachable with no human action.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        bf.DATA_DIR = self.tmp
+        bf.BACKFILL_DIR = self.tmp / "backfill"
+        bf.CURSOR_PATH = self.tmp / "cur.json"
+        bf.DEFAULT_START = "2026-02-27"
+        bf._CURSOR_FLOOR = None
+        self._env = dict(bf.os.environ)
+
+    def tearDown(self):
+        bf.os.environ.clear()
+        bf.os.environ.update(self._env)
+        bf._CURSOR_FLOOR = None
+
+    def test_corrupt_cursor_refuses_instead_of_rewinding(self):
+        bf.CURSOR_PATH.write_text("{ this is not json")
+        with self.assertRaises(bf.CursorUnavailable):
+            bf._load_cursor()
+
+    def test_failed_restore_refuses_instead_of_rewinding(self):
+        """No cursor file AND the workflow says one exists upstream."""
+        bf.os.environ["BACKFILL_CURSOR_RESTORED"] = "0"
+        with self.assertRaises(bf.CursorUnavailable):
+            bf._load_cursor()
+
+    def test_genuine_first_run_still_starts_at_default(self):
+        bf.os.environ["BACKFILL_CURSOR_RESTORED"] = "1"
+        self.assertEqual(bf._load_cursor(),
+                         datetime.fromisoformat("2026-02-27T00:00:00"))
+
+    def test_save_cursor_refuses_to_move_backward(self):
+        bf._CURSOR_FLOOR = datetime.fromisoformat("2026-06-11T00:00:00")
+        with self.assertRaises(bf.CursorUnavailable):
+            bf._save_cursor(datetime.fromisoformat("2026-02-27T00:00:00"))
+        self.assertFalse(bf.CURSOR_PATH.exists(),
+                         "a refused save must not write anything")
+
+    def test_save_cursor_allows_forward_and_equal(self):
+        bf._CURSOR_FLOOR = datetime.fromisoformat("2026-06-11T00:00:00")
+        bf._save_cursor(datetime.fromisoformat("2026-06-11T00:00:00"))
+        bf._save_cursor(datetime.fromisoformat("2026-06-14T00:00:00"))
+        self.assertTrue(
+            json.loads(bf.CURSOR_PATH.read_text())["next_epoch"]
+            .startswith("2026-06-14"))
+
+    def test_main_exits_4_and_issues_no_queries_when_cursor_unavailable(self):
+        bf.CURSOR_PATH.write_text("{ corrupt")
+        calls = []
+
+        class _Sess:
+            headers: dict = {}
+
+            def get(self, url, timeout=None):
+                calls.append(url)
+                raise AssertionError("no query may be issued")
+
+        bf._login = lambda: _Sess()
+        bf._logout = lambda s: None
+        self.assertEqual(bf.main(), 4)
+        self.assertEqual(calls, [], "a refused run must not touch Space-Track")
 
 
 if __name__ == "__main__":

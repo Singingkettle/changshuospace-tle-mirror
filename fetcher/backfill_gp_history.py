@@ -96,17 +96,51 @@ def _logout(session: requests.Session) -> None:
         pass
 
 
+class CursorUnavailable(RuntimeError):
+    """The cursor exists somewhere but this run could not read it.
+
+    Distinct from "there is no cursor yet". Falling back to DEFAULT_START in
+    this case rewinds the frontier by however far the sweep has progressed —
+    measured 2026-08-08: a single failed `gh release download` (the restore
+    step swallows failures with `|| true`) left no cursor file, so the run
+    would have resumed at 2026-02-27, re-queried ~100 finished EPOCH-days,
+    and then PUBLISHED that rewound cursor, because it is not a repair run
+    and the repair guard therefore does not apply. Reachable with no human
+    action at all.
+    """
+
+
 def _load_cursor() -> datetime:
     if CURSOR_PATH.exists():
         try:
             d = json.loads(CURSOR_PATH.read_text())
             return datetime.fromisoformat(d["next_epoch"])
         except Exception as exc:
-            print(f"[backfill] cursor parse failed ({exc}); using start", file=sys.stderr)
+            # A corrupt cursor is NOT a first run. Refuse rather than rewind.
+            raise CursorUnavailable(
+                f"cursor file present but unreadable ({exc}); refusing to "
+                f"fall back to {DEFAULT_START}") from exc
+    # No cursor file at all. That is legitimate ONLY on the very first run;
+    # any later run reaches this state because the restore failed. The
+    # workflow signals which case it is via BACKFILL_CURSOR_RESTORED.
+    if os.environ.get("BACKFILL_CURSOR_RESTORED") == "0":
+        raise CursorUnavailable(
+            "no cursor file and the workflow reported that a release cursor "
+            "EXISTS but could not be restored; refusing to rewind to "
+            f"{DEFAULT_START}")
     return datetime.fromisoformat(DEFAULT_START + "T00:00:00")
 
 
+# Set by main() from the cursor this run loaded; _save_cursor refuses to go
+# below it. None means "no floor known yet" (module import, tests).
+_CURSOR_FLOOR: Optional[datetime] = None
+
+
 def _save_cursor(dt: datetime, extra: dict | None = None) -> None:
+    if _CURSOR_FLOOR is not None and dt < _CURSOR_FLOOR:
+        raise CursorUnavailable(
+            f"refusing to move the cursor backward: {dt.isoformat()} < "
+            f"{_CURSOR_FLOOR.isoformat()}")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
         "next_epoch": dt.isoformat(),
@@ -185,7 +219,17 @@ def _write_window(day_tag: str, records: List[Dict]) -> Path:
 
 def main() -> int:
     end = datetime.fromisoformat(DEFAULT_END + "T00:00:00")
-    cursor = _load_cursor()
+    try:
+        cursor = _load_cursor()
+    except CursorUnavailable as exc:
+        print(f"[backfill] REFUSING TO RUN: {exc}", file=sys.stderr)
+        return 4
+    # Monotonic publish guard. The frontier may only move FORWARD. Recorded
+    # here (before any query) and re-checked before the cursor is written, so
+    # no code path — restore failure, corrupt file, a future edit — can
+    # publish a cursor earlier than the one this run started from.
+    global _CURSOR_FLOOR
+    _CURSOR_FLOOR = cursor
     if cursor >= end:
         print(f"[backfill] cursor {cursor.isoformat()} already past end {end.isoformat()}; done")
         _save_cursor(cursor, {"status": "complete"})
