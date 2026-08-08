@@ -21,6 +21,17 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MANIFEST_PATH = DATA_DIR / "manifest.json"
 SCHEMA_VERSION = 1
 
+# Assets that are NOT regenerated on every run. satcat.json is refreshed at
+# most once per 20h; on the other ~20 runs a day it is simply not in data/.
+# Because the manifest is built from a glob of data/, that made the key
+# vanish from the manifest even though the asset itself survives on the
+# release (`gh release upload --clobber` never deletes it). Consumers read
+# the manifest, not the asset list, so satcat became unreachable for ~19 of
+# every 20 hours -- and the China-side puller's per-slug state froze at
+# whatever its last outcome had been. Carry the previous manifest's entry
+# forward for these keys when the file is absent locally.
+CARRY_FORWARD_KEYS = ("satcat", "decays", "jcat_status")
+
 # Public download URL pattern for assets attached to a Release tag.
 # Owner / repo / tag are filled at runtime from GH context.
 URL_TEMPLATE = (
@@ -125,15 +136,45 @@ def main() -> int:
     if jcat_meta is not None:
         manifest["jcat_status"] = jcat_meta
 
+    # Carry forward optional assets that this run did not regenerate. The
+    # previous manifest is fetched by the workflow ONLY after it has confirmed
+    # the corresponding asset still exists on the release, so a carried entry
+    # always describes bytes that are actually downloadable, with the sha256
+    # they still hash to.
+    prev_path = os.environ.get("CARRY_FORWARD_MANIFEST", "").strip()
+    if prev_path:
+        try:
+            prev = json.loads(Path(prev_path).read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"[build_release] carry-forward manifest unreadable "
+                  f"({prev_path}): {exc}")
+            prev = {}
+        for key in CARRY_FORWARD_KEYS:
+            if key in manifest or key not in prev:
+                continue
+            entry = dict(prev[key])
+            entry["carried_forward"] = True
+            manifest[key] = entry
+            print(f"[build_release] carried forward '{key}' from the previous "
+                  f"manifest (not regenerated this run, asset still on the "
+                  f"release, sha256={str(entry.get('sha256'))[:12]})")
+
     MANIFEST_PATH.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2)
     )
     assets.append(str(MANIFEST_PATH))
 
     print(f"[build_release] manifest -> {MANIFEST_PATH}")
+    # Report what the MANIFEST says, not what this run happened to
+    # regenerate -- a carried-forward asset is present for consumers.
+    def _state(key: str) -> str:
+        entry = manifest.get(key)
+        if entry is None:
+            return "no"
+        return "carried" if entry.get("carried_forward") else "yes"
+
     print(f"[build_release] {len(groups)} groups, "
-          f"satcat={'yes' if satcat_meta else 'no'}, "
-          f"decays={'yes' if decays_meta else 'no'}")
+          f"satcat={_state('satcat')}, decays={_state('decays')}")
     # Emit list for the workflow step to pick up via $GITHUB_OUTPUT.
     out = os.environ.get("GITHUB_OUTPUT")
     if out:

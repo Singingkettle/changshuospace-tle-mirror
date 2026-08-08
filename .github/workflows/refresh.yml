@@ -83,9 +83,28 @@ jobs:
           echo "satcat.json asset last updated ${AGE_H}h ago ($UPDATED_AT)"
           if [ "$AGE_H" -ge 20 ]; then
             echo "do_satcat=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "do_satcat=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # Skipping the refresh. The asset survives on the release, but this
+          # run will not regenerate data/satcat.json, so build_release.py's
+          # glob would drop the manifest key. Hand it the previous manifest to
+          # carry the entry forward.
+          PREV="${GITHUB_WORKSPACE}/prev_manifest.json"
+          if ! gh release download latest --pattern manifest.json \
+                --output "$PREV" --clobber 2>/dev/null; then
+            echo "previous manifest not downloadable -> refresh SATCAT instead"
+            echo "do_satcat=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Self-heal: if a previous run already lost the key, there is
+          # nothing to carry forward, so regenerate once and republish it.
+          if ! python3 -c "import json,sys; sys.exit(0 if 'satcat' in json.load(open('$PREV')) else 1)"; then
+            echo "asset exists but previous manifest has no satcat key -> refresh to repair"
+            echo "do_satcat=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "do_satcat=false" >> "$GITHUB_OUTPUT"
+          echo "carry_forward=$PREV" >> "$GITHUB_OUTPUT"
 
       - name: Fetch CelesTrak (all constellations)
         working-directory: fetcher
@@ -163,6 +182,10 @@ jobs:
           GH_OWNER: ${{ github.repository_owner }}
           GH_REPO:  ${{ github.event.repository.name }}
           GH_TAG:   latest
+          # Written by the SATCAT decision step when it skips the refresh.
+          # Empty on runs that regenerate everything. Deliberately OUTSIDE
+          # data/, which is uploaded wholesale to the release.
+          CARRY_FORWARD_MANIFEST: ${{ steps.satcat.outputs.carry_forward }}
         run: python build_release.py
 
       - name: Upload to rolling 'latest' Release
