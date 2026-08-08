@@ -92,7 +92,15 @@ jobs:
       - name: Stage cursor into release dir
         run: |
           mkdir -p data/backfill
-          if [ -f data/backfill_cursor.json ]; then
+          # A REPAIR run (manual 'start' override) must publish its day files
+          # but must NOT publish its cursor: the cursor is the frontier of the
+          # contiguous sweep, and a repair starts deliberately BEHIND it, so
+          # overwriting the release copy would rewind the frontier by ~100
+          # days and make every scheduled run redo work already done.
+          if [ -n "${{ github.event.inputs.start }}" ]; then
+            rm -f data/backfill/backfill_cursor.json
+            echo "repair run — frontier cursor left untouched on the release"
+          elif [ -f data/backfill_cursor.json ]; then
             cp data/backfill_cursor.json data/backfill/backfill_cursor.json
           fi
           ls -la data/backfill || true
