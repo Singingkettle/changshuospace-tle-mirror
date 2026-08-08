@@ -92,6 +92,20 @@ def fetch_group(slug: str, conf: Dict) -> List[Dict]:
     group = conf.get("group")
     if group:
         recs = _request({"GROUP": group, "FORMAT": "json"}) or []
+        # A CATCH-ALL group (e.g. "other-comm") carries satellites that belong
+        # to other slugs entirely. When filter_patterns is set, `patterns` acts
+        # as a NAME filter on the group result instead of only as the
+        # zero-result fallback below — without it, borrowing a catch-all group
+        # publishes every one of its members under this slug (measured: lynk
+        # published 32 records of which 4 were Lynk).
+        if conf.get("filter_patterns"):
+            pats = [p.upper() for p in (conf.get("patterns") or [])]
+            before = len(recs)
+            recs = [r for r in recs
+                    if any(p in (r.get("OBJECT_NAME") or "").upper()
+                           for p in pats)]
+            print(f"[celestrak] {slug}: group={group} filtered "
+                  f"{before} -> {len(recs)} by {pats}")
         for r in recs:
             nid = r.get("NORAD_CAT_ID")
             if nid:

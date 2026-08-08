@@ -54,7 +54,17 @@ CONSTELLATIONS = {
     "tianqi":     {"group": "tianqi",       "patterns": ["TIANQI"]},
     "yaogan":     {"group": "yaogan",       "patterns": ["YAOGAN"]},
     "bluewalker": {"group": "ast",          "patterns": ["BLUEWALKER"]},
+    # lynk: CelesTrak has no Lynk group, so this borrows "other-comm" — a
+    # CATCH-ALL of miscellaneous comsats. Measured 2026-08-08: that group
+    # returned 32 records of which only 4 are Lynk; the other 28 are SES O3b /
+    # O3b-mPOWER and Telesat LEO 1, which ses.json and telesat.json also
+    # publish. Downstream those satellites were filed under "Lynk" (84 % of
+    # that constellation was wrong) and oscillated as groups re-ingested.
+    # filter_patterns keeps only OBJECT_NAMEs matching `patterns`, which is
+    # what the patterns were always meant to do here — without it they act
+    # only as a zero-result fallback and never run for a non-empty group.
     "lynk":       {"group": "other-comm",   "patterns": ["LYNK"],
+                   "filter_patterns": True,
                    "force_spacetrack": True},
     "telesat":    {"group": "telesat",      "patterns": ["TELESAT"]},
     # Newly added — parity with satellitemap.space menu. CelesTrak does not
