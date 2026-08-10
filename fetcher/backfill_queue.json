@@ -32,13 +32,6 @@
       "why": "Total live-path outage: 2026-01-21..27 holds 15-452 rows/day (and the same number of distinct satellites), then 5-17k rows / 5-10k sats/day through 02-23. Unreachable until now: BACKFILL_START was hard-coded to 2026-02-27, so neither the frontier nor a repair run could ever touch it."
     },
     {
-      "label": "G4-2017-spring",
-      "start": "2017-03-01",
-      "end": "2017-08-01",
-      "days": 153,
-      "why": "2017-04 holds 4,283 rows for the ENTIRE month (143 rows over 143 distinct satellites per day, 1.01 versions/sat) against 269k in 2017-01 and 197k in 2017-08. The lowest four consecutive months after 1990."
-    },
-    {
       "label": "probe-2012-11",
       "start": "2012-11-15",
       "end": "2012-11-18",
@@ -72,13 +65,6 @@
       "end": "2020-12-01",
       "days": 30,
       "why": "Rolling-median outlier; recent enough that the objects are still on orbit and the data is still useful for constellation work."
-    },
-    {
-      "label": "scattered-2023-summer",
-      "start": "2023-07-01",
-      "end": "2023-09-01",
-      "days": 62,
-      "why": "Two consecutive months at 30-53% of neighbours, inside the Starlink build-out era."
     },
     {
       "label": "scattered-1986-summer",
