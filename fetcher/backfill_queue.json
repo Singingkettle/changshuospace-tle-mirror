@@ -25,7 +25,8 @@
     "",
     "2026-08-11: G4-* added for the years the local bulk archive provably cannot fill. data/history/TLEs.zip turns out to be the SAME Space-Track dump already imported as SpaceTrack_CloudStorage, so for those years it parsed millions of records and inserted hundreds. Ordered worst-coverage first (2013 49%, 2014 51%, 2006 59%, 2008 62%).",
     "NOT added: 2005. Its per-day coverage is already 88% (7,584 of 8,604), level with the best archive-filled years (2018 reads 87%), so fetching it would spend Space-Track quota to change nothing.",
-    "Segments must not overlap: the fetcher walks them independently, so a day covered twice is fetched twice against a 300/hour limit."
+    "Segments must not overlap: the fetcher walks them independently, so a day covered twice is fetched twice against a 300/hour limit.",
+    "2026-08-11 (second pass): G4-2009..2012 added. The bulk import completed those years and left them at 71-77% per-day coverage, below the 80% floor the archive itself reaches where it works (2018 87%, 2016 81%). At 4 runs x 8 days = 32 EPOCH-days/day the whole queue is ~4 months."
   ],
   "segments": [
     {
@@ -90,6 +91,34 @@
       "end": "2009-01-01",
       "days": 366,
       "why": "Per-day coverage 62%: 7,143 of 11,577. Archive import inserted 1,981 rows of 4,526,795 parsed."
+    },
+    {
+      "label": "G4-2010-sparse",
+      "start": "2010-01-01",
+      "end": "2011-01-01",
+      "days": 365,
+      "why": "Per-day coverage 71% (10,274 of 14,377 known that month) — the worst of the post-import residue. The bulk archive completed this year and left it here, so only gp_history can close it."
+    },
+    {
+      "label": "G4-2011-sparse",
+      "start": "2011-01-01",
+      "end": "2012-01-01",
+      "days": 365,
+      "why": "Per-day coverage 73% (10,725 of 14,641)."
+    },
+    {
+      "label": "G4-2012-sparse",
+      "start": "2012-01-01",
+      "end": "2012-11-01",
+      "days": 305,
+      "why": "Per-day coverage 75% (11,165 of 14,839). Ends 2012-11-01 because 2012-11-to-2013-step already covers the rest of the year — overlapping would fetch those days twice."
+    },
+    {
+      "label": "G4-2009-sparse",
+      "start": "2009-01-01",
+      "end": "2010-01-01",
+      "days": 365,
+      "why": "Per-day coverage 77% (10,322 of 13,429)."
     }
   ]
 }
