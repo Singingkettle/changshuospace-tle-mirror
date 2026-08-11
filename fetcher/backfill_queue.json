@@ -90,13 +90,6 @@
       "end": "2009-01-01",
       "days": 366,
       "why": "Per-day coverage 62%: 7,143 of 11,577. Archive import inserted 1,981 rows of 4,526,795 parsed."
-    },
-    {
-      "label": "G4-2006-sparse",
-      "start": "2006-01-01",
-      "end": "2007-01-01",
-      "days": 365,
-      "why": "Per-day coverage 59%: 5,252 of 8,885. Archive import inserted 2,080 rows of 4,011,286 parsed."
     }
   ]
 }
