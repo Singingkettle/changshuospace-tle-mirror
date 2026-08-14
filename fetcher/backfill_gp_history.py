@@ -348,6 +348,14 @@ def main() -> int:
     query_failed = None
     try:
         for i in range(DAYS_PER_RUN):
+            # Re-evaluated EVERY window, not once before the loop: the run in
+            # which the frontier reaches the rolling end used to break here
+            # and throw away its remaining windows — with the frontier
+            # advancing daily, that was ~7 of 8 windows lost on every such
+            # run, measured as 26.4 published files/day against the designed
+            # 32. Reaching the end mid-run now falls through to repair-queue
+            # work immediately.
+            frontier_done = cursor >= end
             if frontier_done:
                 plan = _queue_plan(segments, q_index, q_next)
                 if plan is None:
@@ -358,8 +366,6 @@ def main() -> int:
                 win_end = min(q_day + window, q_seg_end)
                 label = f"repair[{segments[q_index].get('label')}]"
             else:
-                if cursor >= end:
-                    break
                 win_start = cursor
                 win_end = min(cursor + window, end)
                 label = "frontier"

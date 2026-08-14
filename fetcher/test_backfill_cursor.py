@@ -204,3 +204,51 @@ class CursorRewindGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class _AllOk:
+    """Every window succeeds with one record."""
+    headers: dict = {}
+
+    def get(self, url, timeout=None):
+        return _Resp(True)
+
+
+class FrontierHandoffTests(unittest.TestCase):
+    """The run in which the frontier reaches the rolling end must hand its
+    REMAINING windows to the repair queue, not throw them away.
+
+    `frontier_done` used to be computed once, before the window loop, so the
+    handoff run broke out with (DAYS_PER_RUN - 1) windows unused — measured
+    on the live job as 26.4 published files/day against the designed 32,
+    a 21% throughput loss on the resource that bounds the whole backfill.
+    """
+
+    def test_midrun_handoff_uses_remaining_windows_for_repairs(self):
+        tmp = Path(tempfile.mkdtemp())
+        bf.DATA_DIR = tmp
+        bf.BACKFILL_DIR = tmp / "backfill"
+        bf.CURSOR_PATH = tmp / "cur.json"
+        bf.QUEUE_PATH = tmp / "queue.json"
+        bf.DEFAULT_START = "2026-03-01"
+        bf.DEFAULT_END = "2026-03-02"      # frontier: exactly one window left
+        bf.DAYS_PER_RUN = 3
+        bf.BETWEEN_S = 0
+        bf._login = lambda: _AllOk()
+        bf._logout = lambda s: None
+        bf.QUEUE_PATH.write_text(json.dumps({"segments": [
+            {"label": "hole-2010", "start": "2010-01-01", "end": "2010-01-05"},
+        ]}))
+
+        rc = bf.main()
+        self.assertEqual(rc, 0)
+        files = sorted(p.name for p in (tmp / "backfill").glob("*.jsonl.gz"))
+        self.assertEqual(
+            files,
+            ["2010-01-01.jsonl.gz", "2010-01-02.jsonl.gz",
+             "2026-03-01.jsonl.gz"],
+            "windows 2-3 must be repair work, not discarded",
+        )
+        cur = json.loads((tmp / "cur.json").read_text())
+        self.assertTrue(cur["next_epoch"].startswith("2026-03-02"),
+                        "the frontier itself must not move on repair windows")
+        self.assertEqual(cur["queue_next"][:10], "2010-01-03")

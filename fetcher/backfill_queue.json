@@ -26,7 +26,8 @@
     "2026-08-11: G4-* added for the years the local bulk archive provably cannot fill. data/history/TLEs.zip turns out to be the SAME Space-Track dump already imported as SpaceTrack_CloudStorage, so for those years it parsed millions of records and inserted hundreds. Ordered worst-coverage first (2013 49%, 2014 51%, 2006 59%, 2008 62%).",
     "NOT added: 2005. Its per-day coverage is already 88% (7,584 of 8,604), level with the best archive-filled years (2018 reads 87%), so fetching it would spend Space-Track quota to change nothing.",
     "Segments must not overlap: the fetcher walks them independently, so a day covered twice is fetched twice against a 300/hour limit.",
-    "2026-08-11 (second pass): G4-2009..2012 added. The bulk import completed those years and left them at 71-77% per-day coverage, below the 80% floor the archive itself reaches where it works (2018 87%, 2016 81%). At 4 runs x 8 days = 32 EPOCH-days/day the whole queue is ~4 months."
+    "2026-08-11 (second pass): G4-2009..2012 added. The bulk import completed those years and left them at 71-77% per-day coverage, below the 80% floor the archive itself reaches where it works (2018 87%, 2016 81%). At 4 runs x 8 days = 32 EPOCH-days/day the whole queue is ~4 months.",
+    "2026-08-14 (batch D1): dropped G5-2001-to-2004 (1,188 d, measured 85-87% filled -- tle2004 contained 2001-2003 all along) and scattered-2020-11 (sampled 83-86%); added the G6-* segments above, each a measured hole: 2015-H1 is the last contiguous gap, the rest are day-level thin patches the month-level sampler cannot see. Net: queue shrank by ~939 EPOCH-days (~37 fetch-days)."
   ],
   "segments": [
     {
@@ -58,25 +59,11 @@
       "why": "Rolling-median outlier at 0.4x its +-6-month neighbours."
     },
     {
-      "label": "scattered-2020-11",
-      "start": "2020-11-01",
-      "end": "2020-12-01",
-      "days": 30,
-      "why": "Rolling-median outlier; recent enough that the objects are still on orbit and the data is still useful for constellation work."
-    },
-    {
       "label": "scattered-1986-summer",
       "start": "1986-07-01",
       "end": "1986-09-01",
       "days": 62,
       "why": "Rolling-median outlier. Lowest value of the set — pre-LEO-constellation era — deliberately ordered last before the multi-year block."
-    },
-    {
-      "label": "G5-2001-to-2004",
-      "start": "2001-05-01",
-      "end": "2004-08-01",
-      "days": 1188,
-      "why": "The largest remaining job and the lowest density-per-request: 39 months at ~72k/month against a ~290k/month baseline, i.e. 75% missing, ~8.5M rows. Ordered last on purpose — everything above closes a hole that current LEO research can actually use, this one closes a hole in the pre-constellation record."
     },
     {
       "label": "G4-2014-sparse",
@@ -119,6 +106,36 @@
       "end": "2010-01-01",
       "days": 365,
       "why": "Per-day coverage 77% (10,322 of 13,429)."
+    },
+    {
+      "label": "G6-2015-H1",
+      "start": "2015-01-01",
+      "end": "2015-07-01"
+    },
+    {
+      "label": "G6-2019-11",
+      "start": "2019-11-01",
+      "end": "2019-12-01"
+    },
+    {
+      "label": "G6-2023-07",
+      "start": "2023-07-01",
+      "end": "2023-08-01"
+    },
+    {
+      "label": "G6-2006-06",
+      "start": "2006-06-01",
+      "end": "2006-07-01"
+    },
+    {
+      "label": "G6-2020-11-08",
+      "start": "2020-11-08",
+      "end": "2020-11-12"
+    },
+    {
+      "label": "G6-2022-06-16",
+      "start": "2022-06-16",
+      "end": "2022-06-19"
     }
   ]
 }
