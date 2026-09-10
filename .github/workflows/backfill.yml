@@ -58,6 +58,15 @@ jobs:
       - name: Install deps
         run: pip install -r fetcher/requirements.txt
 
+      - name: Prune old day files (keep release under GitHub's 1000-asset cap)
+        # Runs BEFORE restore/fetch: guarantees upload headroom before any
+        # Space-Track quota is spent, and restore then only re-downloads what
+        # is still on the release (so the regenerated manifest never lists a
+        # pruned file). See fetcher/prune_release_assets.sh.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash fetcher/prune_release_assets.sh backfill-latest 500 800
+
       - name: Restore cursor + previous backfill assets
         env:
           GH_TOKEN: ${{ github.token }}

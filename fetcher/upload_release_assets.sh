@@ -77,6 +77,22 @@ upload_one() {
 
 ensure_release
 
+# Day files are immutable once published (a given EPOCH day's gp_history does
+# not change), yet every run used to re-download all of them in the restore
+# step and re-upload them here with --clobber: ~2,000 API calls per run, and
+# -- because --clobber deletes and re-creates the asset -- it reset every
+# asset's created_at, which made age-based retention impossible. It is also
+# how the rolling release was driven straight into GitHub's 1000-asset cap.
+# Skip a *.jsonl.gz whose name is already on the release with the same size;
+# a repair run (re-fetched day) yields a different size and still uploads.
+# Cursor / manifest / other .json are small and change every run: always upload.
+declare -A REMOTE_SIZE
+while IFS=$'\t' read -r name size; do
+  [[ -n "$name" ]] && REMOTE_SIZE["$name"]="$size"
+done < <(gh api "repos/${GITHUB_REPOSITORY:-${REPO:-}}/releases/tags/${TAG}" \
+           --jq '.assets[] | "\(.name)\t\(.size)"' 2>/dev/null || true)
+echo "remote assets on ${TAG}: ${#REMOTE_SIZE[@]}"
+
 mapfile -t ASSETS < <(
   find "$DATA_DIR" -maxdepth 1 -type f \( \
     -name "*.jsonl.gz" -o \
@@ -91,7 +107,15 @@ fi
 # Upload data assets first (jsonl.gz day files + cursor). Only publish the
 # manifest after every referenced asset has uploaded successfully, so clients
 # never consume a half-new release.
+SKIPPED=0
 for asset in "${ASSETS[@]}"; do
+  base="$(basename "$asset")"
+  if [[ "$base" == *.jsonl.gz && -n "${REMOTE_SIZE[$base]:-}" \
+        && "${REMOTE_SIZE[$base]}" == "$(stat -c %s "$asset")" ]]; then
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
   upload_one "$asset"
 done
+echo "skipped ${SKIPPED} already-published day file(s)"
 upload_one "$MANIFEST"
