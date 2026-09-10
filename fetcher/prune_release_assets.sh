@@ -18,8 +18,15 @@ set -euo pipefail
 TAG="${1:?tag}"; KEEP="${2:?keep}"; TRIGGER="${3:?trigger}"
 REPO_SLUG="${GITHUB_REPOSITORY:-${REPO:?set GITHUB_REPOSITORY or REPO}}"
 
-mapfile -t ROWS < <(gh api "repos/${REPO_SLUG}/releases/tags/${TAG}" \
-  --jq '.assets[] | select(.name | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}\\.jsonl\\.gz$"))
+# Resolve the numeric release id, then page through its assets. The
+# release-by-tag object does embed the full asset list today (verified at
+# 1000), but the dedicated assets endpoint is the documented paginated path
+# and the only one guaranteed not to truncate. Asset ids here are the numeric
+# REST ids the DELETE endpoint needs (gh release view --json gives node ids,
+# which DELETE answers with 404 -- bitten by that on 2026-09-10).
+RELEASE_ID="$(gh api "repos/${REPO_SLUG}/releases/tags/${TAG}" --jq '.id')"
+mapfile -t ROWS < <(gh api "repos/${REPO_SLUG}/releases/${RELEASE_ID}/assets?per_page=100" --paginate \
+  --jq '.[] | select(.name | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}\\.jsonl\\.gz$"))
         | [.created_at, .id, .name] | @tsv' | sort)
 COUNT="${#ROWS[@]}"
 echo "prune ${TAG}: ${COUNT} day file(s) on release (keep=${KEEP}, trigger=${TRIGGER})"
