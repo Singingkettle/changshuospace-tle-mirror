@@ -87,11 +87,23 @@ ensure_release
 # a repair run (re-fetched day) yields a different size and still uploads.
 # Cursor / manifest / other .json are small and change every run: always upload.
 declare -A REMOTE_SIZE
+# bash 5.1 under `set -u` treats an associative array that has never had an
+# element ASSIGNED as unbound -- even ${#arr[@]} aborts the script. That is
+# precisely the brand-new-tag case (the daily snapshot release, which does not
+# exist yet, so the lookup below returns nothing): it broke every daily
+# snapshot from 2026-09-10 until this fix, leaving empty releases behind. Seed
+# a key no basename can ever collide with (a basename cannot contain "/"), and
+# count real entries separately so the log line stays truthful.
+REMOTE_SIZE["/none"]=""
+REMOTE_COUNT=0
 while IFS=$'\t' read -r name size; do
-  [[ -n "$name" ]] && REMOTE_SIZE["$name"]="$size"
+  if [[ -n "$name" ]]; then
+    REMOTE_SIZE["$name"]="$size"
+    REMOTE_COUNT=$((REMOTE_COUNT + 1))
+  fi
 done < <(gh api "repos/${GITHUB_REPOSITORY:-${REPO:-}}/releases/tags/${TAG}" \
            --jq '.assets[] | "\(.name)\t\(.size)"' 2>/dev/null || true)
-echo "remote assets on ${TAG}: ${#REMOTE_SIZE[@]}"
+echo "remote assets on ${TAG}: ${REMOTE_COUNT}"
 
 mapfile -t ASSETS < <(
   find "$DATA_DIR" -maxdepth 1 -type f \( \
